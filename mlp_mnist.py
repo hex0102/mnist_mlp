@@ -4,9 +4,10 @@ from torch.autograd import Variable
 import torch.utils.data as Data
 import torchvision
 #import matplotlib.
+#hexin
+
 
 torch.manual_seed(1) 
-
 
 EPOCH = 10
 BATCH_SIZE = 50
