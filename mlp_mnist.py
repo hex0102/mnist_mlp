@@ -6,12 +6,12 @@ import torchvision
 #import matplotlib.
 #hexin  hexin
 from format_input_fixed_point import Formatting
-from format_input_fixed_point import apply_format
+from format_input_fixed_point import apply_format, apply_format_inplace
 
 torch.manual_seed(1)
 
 
-EPOCH = 2
+EPOCH = 0
 BATCH_SIZE = 50
 LR = 0.01
 DOWNLOAD_MNIST = True
@@ -34,6 +34,9 @@ test_x = Variable(torch.unsqueeze(test_data.test_data, dim=1),volatile=True).typ
 test_y = test_data.test_labels[:2000]
 
 
+
+def fixed_point_hook(self,input, output):
+    output = apply_format('FXP',output,4,16)
 
 
 class MLP(nn.Module):
@@ -91,23 +94,29 @@ for epoch in range(EPOCH):
             
 
 
-hidden = list(mlp.hidden1.parameters())
-out = list(mlp.out.parameters())
+linear1 = list(mlp.hidden1.parameters())
+#out = list(mlp.out.parameters())
 
 #print(linear1)   parameter -> contain both weight and bias
 #print(linear1[0]) parameter -> contain weight
 #print(linear1[0].data)   weight tensor
 
-
-
-
-#apply_format('FXP',linear1[0].data,4,12)
+linear1[0].data=apply_format_inplace('FXP',linear1[0].data,4,12)
 #apply_format('FXP',linear1[0],4,12)
 
 
 
 #Test neural network performance
-config = torch.IntTensor([1])
+
+
+
+
+config = torch.IntTensor([0])
+mlp.hidden1.register_forward_hook(fixed_point_hook)
+mlp.activation.register_forward_hook(fixed_point_hook)
+mlp.out.register_forward_hook(fixed_point_hook)
+
+
 
 test_output = mlp(test_x[:10],config)
 pred_y = torch.max(test_output, 1)[1].data.numpy().squeeze()
