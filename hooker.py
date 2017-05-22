@@ -1,4 +1,5 @@
 
+'''
 import torch
 from torch.autograd import Variable
 
@@ -24,6 +25,8 @@ c.sum().backward()
 
 print(x.grad) # should be 2, is 2
 print(y.grad) # should be 3, is 6
+
+'''
 
 
 # -*- coding: utf-8 -*-
@@ -60,7 +63,7 @@ All of your networks are derived from the base class ``nn.Module``:
    run, from input to output
 """
 
-"""
+
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
@@ -190,7 +193,7 @@ def printnorm(self, input, output):
     print('output norm:', output.data.norm())
 
 
-net.conv2.register_forward_hook(printnorm)
+#net.conv2.register_forward_hook(printnorm)
 
 out = net(input)
 
@@ -200,22 +203,29 @@ out = net(input)
 
 
 def printgradnorm(self, grad_input, grad_output):
+    print('>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
     print('Inside ' + self.__class__.__name__ + ' backward')
     print('Inside class:' + self.__class__.__name__)
     print('')
     print('grad_input: ', type(grad_input))
+    print('grad_input tuple size: ', grad_input.__len__())
     print('grad_input[0]: ', type(grad_input[0]))
     print('grad_output: ', type(grad_output))
+    print('grad_output tuple size: ', grad_output.__len__())
     print('grad_output[0]: ', type(grad_output[0]))
     print('')
     print('grad_input size:', grad_input[0].size())
+    print('grad_input size:', grad_input[1].size())
+    print('grad_input size:', grad_input[2].size())
     print('grad_output size:', grad_output[0].size())
     print('grad_input norm:', grad_input[0].data.norm())
+    print('>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
 
 
 net.conv2.register_backward_hook(printgradnorm)
+net.fc1.register_backward_hook(printgradnorm)
+
 
 out = net(input)
 err = loss_fn(out, target)
 err.backward()
-"""

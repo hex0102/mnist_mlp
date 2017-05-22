@@ -11,13 +11,17 @@ from format_input_fixed_point import apply_format,apply_format_inplace
 torch.manual_seed(1)
 
 
-EPOCH = 0
+EPOCH = 1
 BATCH_SIZE = 50
 LR = 0.01
 DOWNLOAD_MNIST = True
-IL = torch.IntTensor([4])
-FL = torch.IntTensor([12])
+# IL = torch.IntTensor([4])
+# FL = torch.IntTensor([12])
+IL = 4
+FL = 12
 config = torch.IntTensor([0])
+nonideal_train = 0
+nonideal_inference = 0
 
 train_data = torchvision.datasets.MNIST(
     root = './mnist/',
@@ -35,8 +39,37 @@ test_y = test_data.test_labels[:2000]
 
 
 
-def fixed_point_hook(self,input, output):
-    apply_format_inplace('FXP',output.data,4,16)
+def fixed_point_hook(self, input, output):
+    apply_format_inplace('FXP', output.data, 4, 12)
+
+
+def fixed_point_back_hook(self, grad_in, grad_out):
+    #print('Inside ' + self.__class__.__name__ + ' backward')
+    #print(grad_in)
+    if grad_in[0] is not None:
+        apply_format_inplace('FXP', grad_in[0].data, 4, 12)
+    #print('>>>>>>>>>>>>>>>>>>>>>')
+
+
+
+'''
+def fixed_point_back_hook(self, grad_input, grad_output):
+    print('Inside ' + self.__class__.__name__ + ' backward')
+    print('Inside class:' + self.__class__.__name__)
+    print('')
+    print('grad_input: ', type(grad_input))
+    print('grad_input tuple size: ', grad_input.__len__())
+    print('grad_input[0]: ', type(grad_input[0]))
+    print('grad_output: ', type(grad_output))
+    print('grad_output tuple size: ', grad_output.__len__())
+    print('grad_output[0]: ', type(grad_output[0]))
+    print('')
+    print('grad_input size:', grad_input[0].size())
+    print('grad_input size:', grad_input[1].size())
+    print('grad_input size:', grad_input[2].size())
+    print('grad_output size:', grad_output[0].size())
+    print('grad_input norm:', grad_input[0].data.norm())
+'''
 
 
 class MLP(nn.Module):
@@ -70,10 +103,18 @@ class MLP(nn.Module):
         return output #print(x)
 
 mlp=MLP()
-#print(mlp)
+#add backward hooker on each layer
+mlp.hidden1.register_backward_hook(fixed_point_back_hook)
+mlp.activation.register_backward_hook(fixed_point_back_hook)
+mlp.out.register_backward_hook(fixed_point_back_hook)
+
 
 optimizer = torch.optim.SGD(mlp.parameters(), lr=LR, momentum=0.9) 
 loss_func = nn.CrossEntropyLoss()
+
+#>>>>>>>>Dump neural network weight
+linear = list(mlp.hidden1.parameters())
+out = list(mlp.out.parameters())
 
 for epoch in range(EPOCH):
     for step, (x,y) in enumerate(train_loader):
@@ -86,50 +127,45 @@ for epoch in range(EPOCH):
         loss.backward()
         optimizer.step()
 
+
+        apply_format_inplace('FXP', linear[0].data, IL, FL)
+        apply_format_inplace('FXP', out[0].data, IL, FL)
+
+
         if step % 50 == 0:
             test_output = mlp(test_x)
             pred_y = torch.max(test_output,1)[1].data.squeeze()
             accuracy = sum(pred_y == test_y)/float(test_y.size(0))
             print('Epoch: ',epoch,'| train loss : %.4f' %loss.data[0], '| test accuracy: %.2f' % accuracy)
-            
 
 
-linear = list(mlp.hidden1.parameters())
-out = list(mlp.out.parameters())
-#out = list(mlp.out.parameters())
-
-#print(linear1)   parameter -> contain both weight and bias
-#print(linear1[0]) parameter -> contain weight
-#print(linear1[0].data)   weight tensor
-
-apply_format_inplace('FXP',linear[0].data,4,12)
-apply_format_inplace('FXP',out[0].data,4,12)
-apply_format_inplace('FXP',test_x.data,4,12)
-
-print(type(test_x))
-
-#apply_format('FXP',linear1[0],4,12)
+#>>>>>>>>Test neural network performance
 
 
 
-#Test neural network performance
 
 
+#>>>>>>>>Regulate neural network weight into fixed point counterpart
+apply_format_inplace('FXP',linear[0].data,IL,FL) #
+apply_format_inplace('FXP',out[0].data,IL,FL)    #
+apply_format_inplace('FXP',test_x.data,IL,FL)    # input regulation
+
+#print(type(test_x)) #<class 'torch.autograd.variable.Variable'>
+#print(type(test_x.data)) #<class 'torch.FloatTensor'>
 
 
 #config = torch.IntTensor([0])
+#>>>>>>>> Add forward hooks to network layer and regulate its intermeidate output to fixed point counterpart
 mlp.hidden1.register_forward_hook(fixed_point_hook)
 mlp.activation.register_forward_hook(fixed_point_hook)
 mlp.out.register_forward_hook(fixed_point_hook)
 
 
+#>>>>>>>> Testing!!!
 test_output = mlp(test_x)
 #test_output = mlp(test_x,config)
-
 pred_y = torch.max(test_output, 1)[1].data.squeeze()
 accuracy = sum(pred_y == test_y)/float(test_y.size(0))
 
 print(accuracy, 'prediction accuracy!')
-
-
 print('End of testing!')
