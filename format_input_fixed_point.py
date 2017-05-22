@@ -17,7 +17,7 @@ class Formatting(torch.autograd.Function):
         grad_input = grad_output.clone()
         return grad_input
 
-
+'''
 def apply_format(format, X, IL, FL):
     if format == 'FXP':
         return fixed_point(X, IL,FL)
@@ -35,7 +35,7 @@ def fixed_point(x, IL, FL):
     #x = torch.clamp(x,min=-MAX, max=MAX)
     #x = torch.div(x,power)
     return x
-
+'''
 
 def apply_format_inplace(format, X, IL, FL):
     if format == 'FXP':
