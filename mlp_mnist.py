@@ -6,12 +6,12 @@ import torchvision
 #import matplotlib.
 #hexin  hexin
 from format_input_fixed_point import Formatting
-from format_input_fixed_point import apply_format, apply_format_inplace
+from format_input_fixed_point import apply_format,apply_format_inplace
 
 torch.manual_seed(1)
 
 
-EPOCH = 0
+EPOCH = 5
 BATCH_SIZE = 50
 LR = 0.01
 DOWNLOAD_MNIST = True
@@ -94,14 +94,18 @@ for epoch in range(EPOCH):
             
 
 
-linear1 = list(mlp.hidden1.parameters())
+linear = list(mlp.hidden1.parameters())
+out = list(mlp.out.parameters())
 #out = list(mlp.out.parameters())
 
 #print(linear1)   parameter -> contain both weight and bias
 #print(linear1[0]) parameter -> contain weight
 #print(linear1[0].data)   weight tensor
 
-linear1[0].data=apply_format_inplace('FXP',linear1[0].data,4,12)
+apply_format_inplace('FXP',linear[0].data,3,12)
+apply_format_inplace('FXP',out[0].data,3,12)
+
+
 #apply_format('FXP',linear1[0],4,12)
 
 
@@ -118,9 +122,12 @@ mlp.out.register_forward_hook(fixed_point_hook)
 
 
 
-test_output = mlp(test_x[:10],config)
-pred_y = torch.max(test_output, 1)[1].data.numpy().squeeze()
-print(pred_y, 'prediction number')
-print(test_y[:10].numpy(), 'real number')
+test_output = mlp(test_x,config)
+
+pred_y = torch.max(test_output, 1)[1].data.squeeze()
+accuracy = sum(pred_y == test_y)/float(test_y.size(0))
+
+print(accuracy, 'prediction accuracy!')
+
 
 print('End of testing!')
