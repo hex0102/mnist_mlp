@@ -11,7 +11,7 @@ from format_input_fixed_point import apply_format,apply_format_inplace
 torch.manual_seed(1)
 
 
-EPOCH = 5
+EPOCH = 0
 BATCH_SIZE = 50
 LR = 0.01
 DOWNLOAD_MNIST = True
@@ -36,7 +36,7 @@ test_y = test_data.test_labels[:2000]
 
 
 def fixed_point_hook(self,input, output):
-    output = apply_format('FXP',output,4,16)
+    apply_format_inplace('FXP',output.data,4,16)
 
 
 class MLP(nn.Module):
@@ -56,15 +56,15 @@ class MLP(nn.Module):
         )
         '''
         self.hidden1 = nn.Linear(784,100)
-        self.formatting = Formatting()
+        #self.formatting = Formatting()
         self.activation = nn.Sigmoid()
         self.out = nn.Linear(100,10)
 
-    def forward(self,x, config):
+    def forward(self,x):
         x = x.view(x.size(0),-1)
         x = self.hidden1(x)
-        if(torch.equal(config, torch.IntTensor([1]))):
-            x = self.formatting(x)
+        #if(torch.equal(config, torch.IntTensor([1]))):
+        #    x = self.formatting(x)
         x = self.activation(x)
         output = self.out(x)
         return output #print(x)
@@ -80,14 +80,14 @@ for epoch in range(EPOCH):
         b_x = Variable(x)
         b_y = Variable(y)
 
-        output = mlp(b_x,config)
+        output = mlp(b_x)
         loss = loss_func(output,b_y)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         if step % 50 == 0:
-            test_output = mlp(test_x,config)
+            test_output = mlp(test_x)
             pred_y = torch.max(test_output,1)[1].data.squeeze()
             accuracy = sum(pred_y == test_y)/float(test_y.size(0))
             print('Epoch: ',epoch,'| train loss : %.4f' %loss.data[0], '| test accuracy: %.2f' % accuracy)
@@ -102,9 +102,11 @@ out = list(mlp.out.parameters())
 #print(linear1[0]) parameter -> contain weight
 #print(linear1[0].data)   weight tensor
 
-apply_format_inplace('FXP',linear[0].data,3,12)
-apply_format_inplace('FXP',out[0].data,3,12)
+apply_format_inplace('FXP',linear[0].data,4,12)
+apply_format_inplace('FXP',out[0].data,4,12)
+apply_format_inplace('FXP',test_x.data,4,12)
 
+print(type(test_x))
 
 #apply_format('FXP',linear1[0],4,12)
 
@@ -115,14 +117,14 @@ apply_format_inplace('FXP',out[0].data,3,12)
 
 
 
-config = torch.IntTensor([0])
+#config = torch.IntTensor([0])
 mlp.hidden1.register_forward_hook(fixed_point_hook)
 mlp.activation.register_forward_hook(fixed_point_hook)
 mlp.out.register_forward_hook(fixed_point_hook)
 
 
-
-test_output = mlp(test_x,config)
+test_output = mlp(test_x)
+#test_output = mlp(test_x,config)
 
 pred_y = torch.max(test_output, 1)[1].data.squeeze()
 accuracy = sum(pred_y == test_y)/float(test_y.size(0))
