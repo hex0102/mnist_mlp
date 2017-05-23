@@ -1,1 +1,1 @@
-Hardware-aware Neural Network training and inference
+## Hardware-aware Neural Network training and inference
