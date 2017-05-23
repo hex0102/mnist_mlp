@@ -8,7 +8,8 @@ class MLP(nn.Module):
         super(MLP,self).__init__()
         self.hidden1 = nn.Linear(784,100)
         #self.formatting = Formatting()
-        self.activation = nn.Sigmoid()
+        self.activation = nn.ReLU()
+        #self.activation = nn.Sigmoid()
         self.out = nn.Linear(100,10)
 
     def forward(self,x):

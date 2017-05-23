@@ -2,25 +2,25 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.utils.data as Data
-import torchvision
 from mlp_class import MLP
-#import matplotlib.
-#from format_input_fixed_point import Formatting
-from format_input_fixed_point import apply_format_inplace
+#import matplotlib.pyplot as plt
+from utils import *
+
 
 torch.manual_seed(1)
 
 
-EPOCH = 10
-BATCH_SIZE = 50
+EPOCH = 40
+BATCH_SIZE = 100
 LR = 0.01
 DOWNLOAD_MNIST = True
+save_model = 1
 
 
-IL = 3  # IL = torch.IntTensor([4])
-FL = 7 # FL = torch.IntTensor([12])
-nonideal_train = 0
-nonideal_inference = 1
+IL = 4  # IL = torch.IntTensor([4])
+FL = 10 # FL = torch.IntTensor([12])
+nonideal_train = 1
+nonideal_inference = 0
 
 train_data = torchvision.datasets.MNIST(
     root = './mnist/',
@@ -84,16 +84,19 @@ for epoch in range(EPOCH):
             apply_format_inplace('FXP', linear[0].data, IL, FL)
             apply_format_inplace('FXP', out[0].data, IL, FL)
 
+        if step % 50 == 0:
+            print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0])
 
+        '''
         if step % 50 == 0:
             test_output = mlp(test_x)
             pred_y = torch.max(test_output,1)[1].data.squeeze()
             accuracy = sum(pred_y == test_y)/float(test_y.size(0))
             print('Epoch: ',epoch,'| train loss : %.4f' %loss.data[0], '| test accuracy: %.2f' % accuracy)
+        '''
 
-
-
-torch.save(mlp, 'mlp_mnist.pkl')
+if save_model:
+    torch.save(mlp, 'mlp_mnist2.pkl')
     #>>>>>>>>Test neural network performance
 
 
