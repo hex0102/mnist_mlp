@@ -3,22 +3,22 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.utils.data as Data
 import torchvision
+from mlp_class import MLP
 #import matplotlib.
-#hexin  hexin
-from format_input_fixed_point import Formatting
+#from format_input_fixed_point import Formatting
 from format_input_fixed_point import apply_format_inplace
 
 torch.manual_seed(1)
 
 
-EPOCH = 5
+EPOCH = 10
 BATCH_SIZE = 50
 LR = 0.01
 DOWNLOAD_MNIST = True
 
 
-IL = 4  # IL = torch.IntTensor([4])
-FL = 2 # FL = torch.IntTensor([12])
+IL = 3  # IL = torch.IntTensor([4])
+FL = 7 # FL = torch.IntTensor([12])
 nonideal_train = 0
 nonideal_inference = 1
 
@@ -44,29 +44,11 @@ def fixed_point_hook(self, input, output):
 
 def fixed_point_back_hook(self, grad_in, grad_out):
     #print('Inside ' + self.__class__.__name__ + ' backward')
-    #print(grad_in)
     if grad_in[0] is not None:
         apply_format_inplace('FXP', grad_in[0].data, IL, FL)
-    #print('>>>>>>>>>>>>>>>>>>>>>')
 
 
 
-
-class MLP(nn.Module):
-    def __init__(self):
-        super(MLP,self).__init__()
-        self.hidden1 = nn.Linear(784,100)
-        #self.formatting = Formatting()
-        self.activation = nn.Sigmoid()
-        self.out = nn.Linear(100,10)
-
-    def forward(self,x):
-        x = x.view(x.size(0),-1)
-        x = self.hidden1(x)
-        # x = self.formatting(x)
-        x = self.activation(x)
-        output = self.out(x)
-        return output
 
 mlp=MLP()
 optimizer = torch.optim.SGD(mlp.parameters(), lr=LR, momentum=0.9)
@@ -110,11 +92,13 @@ for epoch in range(EPOCH):
             print('Epoch: ',epoch,'| train loss : %.4f' %loss.data[0], '| test accuracy: %.2f' % accuracy)
 
 
-#>>>>>>>>Test neural network performance
+
+torch.save(mlp, 'mlp_mnist.pkl')
+    #>>>>>>>>Test neural network performance
 
 
 #>>>>>>>>Regulate neural network weight into fixed point counterpart
-if(nonideal_inference):
+if nonideal_inference:
     apply_format_inplace('FXP',linear[0].data,IL,FL) # weight regulation
     apply_format_inplace('FXP',out[0].data,IL,FL)    # bias regulation
     apply_format_inplace('FXP',test_x.data,IL,FL)    # input regulation
@@ -124,7 +108,7 @@ if(nonideal_inference):
 
 
 #>>>>>>>>add forward hooker on each layer if non-ideal inference
-if(nonideal_inference and (not nonideal_train )):
+if nonideal_inference and (not nonideal_train ):
     print('applied!!!')
     mlp.hidden1.register_forward_hook(fixed_point_hook)
     mlp.activation.register_forward_hook(fixed_point_hook)

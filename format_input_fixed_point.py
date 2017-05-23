@@ -2,6 +2,7 @@ import torch
 from torch.autograd import Variable
 
 
+'''
 class Formatting(torch.autograd.Function):
 
     def forward(self, x):
@@ -17,7 +18,7 @@ class Formatting(torch.autograd.Function):
         grad_input = grad_output.clone()
         return grad_input
 
-'''
+
 def apply_format(format, X, IL, FL):
     if format == 'FXP':
         return fixed_point(X, IL,FL)
