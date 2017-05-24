@@ -1,4 +1,5 @@
 import torch
+import torchvision
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.utils.data as Data
@@ -10,7 +11,7 @@ from utils import *
 torch.manual_seed(1)
 
 
-EPOCH = 40
+EPOCH = 0
 BATCH_SIZE = 100
 LR = 0.01
 DOWNLOAD_MNIST = True
@@ -19,8 +20,8 @@ save_model = 1
 
 IL = 4  # IL = torch.IntTensor([4])
 FL = 10 # FL = torch.IntTensor([12])
-nonideal_train = 1
-nonideal_inference = 0
+nonideal_train = 0
+nonideal_inference = 1
 
 train_data = torchvision.datasets.MNIST(
     root = './mnist/',
@@ -105,6 +106,7 @@ if nonideal_inference:
     apply_format_inplace('FXP',linear[0].data,IL,FL) # weight regulation
     apply_format_inplace('FXP',out[0].data,IL,FL)    # bias regulation
     apply_format_inplace('FXP',test_x.data,IL,FL)    # input regulation
+    apply_bitflip(linear[0].data,0.5,3,10,13)
 
 #print(type(test_x)) #<class 'torch.autograd.variable.Variable'>
 #print(type(test_x.data)) #<class 'torch.FloatTensor'>
