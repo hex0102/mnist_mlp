@@ -14,9 +14,9 @@ torch.manual_seed(1)
 
 EPOCH = 30
 BATCH_SIZE = 100
-LR = 0.01
+LR = 0.1
 DOWNLOAD_MNIST = True
-save_model = 1
+save_model = 0
 
 
 IL = 4  # IL = torch.IntTensor([4])
@@ -46,14 +46,18 @@ def fixed_point_hook(self, input, output):
 
 def fixed_point_back_hook(self, grad_in, grad_out):
     #print('Inside ' + self.__class__.__name__ + ' backward')
+    #print('grad_output size:', grad_out[0].size())
+    #print(grad_out[0])
     #print('grad_input size:', grad_in[0].size())
+    #print(grad_in[0])
     #print('grad_input size:', grad_in[1].size())
     #print('grad_input size:', grad_in[2].size())
     #print('grad_input tuple size: ', grad_in.__len__())
     if grad_in.__len__() > 1:
         #print('grad_input size:', grad_in[1].size())
-        apply_format_inplace('FXP', grad_in[1].data, IL, FL)
-        apply_format_inplace('FXP', grad_in[2].data, IL, FL)
+        apply_format_inplace('FXP', grad_in[0].data, IL, FL)
+        apply_format_inplace('FXP', grad_in[1].data, IL, FL)#weight
+        apply_format_inplace('FXP', grad_in[2].data, IL, FL)#bias
         #print(type(grad_in[0]))
         #print(type(grad_in[1]))
         #print(type(grad_in[2]))
@@ -70,18 +74,30 @@ loss_func = nn.CrossEntropyLoss()
 if(nonideal_train):
     mlp.hidden1.register_backward_hook(fixed_point_back_hook)
     mlp.activation.register_backward_hook(fixed_point_back_hook)
+    mlp.hidden2.register_backward_hook(fixed_point_back_hook)
+    mlp.activation2.register_backward_hook(fixed_point_back_hook)
     mlp.out.register_backward_hook(fixed_point_back_hook)
     #add foward hooker on each layer, , to regulate the layer out to fixed point representation
     mlp.hidden1.register_forward_hook(fixed_point_hook)
     mlp.activation.register_forward_hook(fixed_point_hook)
+    mlp.hidden2.register_forward_hook(fixed_point_hook)
+    mlp.activation2.register_forward_hook(fixed_point_hook)
     mlp.out.register_forward_hook(fixed_point_hook)
 
 
 #>>>>>>>>Dump neural network weight to list
 linear = list(mlp.hidden1.parameters())
 init.constant(linear[1].data,0)
+linear2 = list(mlp.hidden2.parameters())
+init.constant(linear2[1].data,0)
 out = list(mlp.out.parameters())
 init.constant(out[1].data,0)
+
+init.normal(linear[0].data, mean=0, std=0.01)
+init.normal(linear2[0].data, mean=0, std=0.01)
+init.normal(out[0].data, mean=0, std=0.01)
+
+
 
 for epoch in range(EPOCH):
     for step, (x,y) in enumerate(train_loader):
@@ -97,8 +113,10 @@ for epoch in range(EPOCH):
         if(nonideal_train):
             apply_format_inplace('FXP', linear[0].data, IL, FL)#weight
             apply_format_inplace('FXP', linear[1].data, IL, FL)#bias
-            apply_format_inplace('FXP', out[0].data, IL, FL)
-            apply_format_inplace('FXP', out[1].data, IL, FL)
+            apply_format_inplace('FXP', linear2[0].data, IL, FL)#weight
+            apply_format_inplace('FXP', linear2[1].data, IL, FL)#bias
+            apply_format_inplace('FXP', out[0].data, IL, FL)#weight
+            apply_format_inplace('FXP', out[1].data, IL, FL)#bias
 
         if step % 50 == 0:
             print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0])
@@ -112,6 +130,7 @@ for epoch in range(EPOCH):
         '''
 
 if save_model:
+    print('Saving model......')
     torch.save(mlp, 'mlp_mnist2.pkl')
     #>>>>>>>>Test neural network performance
 
@@ -120,6 +139,8 @@ if save_model:
 if nonideal_inference:
     apply_format_inplace('FXP',linear[0].data,IL,FL) # weight regulation
     apply_format_inplace('FXP', linear[1].data, IL, FL)
+    apply_format_inplace('FXP',linear2[0].data,IL,FL) # weight regulation
+    apply_format_inplace('FXP', linear2[1].data, IL, FL)
     apply_format_inplace('FXP',out[0].data,IL,FL)    # weight regulation
     apply_format_inplace('FXP', out[1].data, IL, FL)
     apply_format_inplace('FXP',test_x.data,IL,FL)    # input regulation
@@ -134,6 +155,8 @@ if nonideal_inference and (not nonideal_train ):
     print('applied!!!')
     mlp.hidden1.register_forward_hook(fixed_point_hook)
     mlp.activation.register_forward_hook(fixed_point_hook)
+    mlp.hidden2.register_forward_hook(fixed_point_hook)
+    mlp.activation2.register_forward_hook(fixed_point_hook)
     mlp.out.register_forward_hook(fixed_point_hook)
 
 #>>>>>>>> Testing!!!
