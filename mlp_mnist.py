@@ -5,11 +5,13 @@ import torch.nn.init as init
 from torch.autograd import Variable
 import torch.utils.data as Data
 from mlp_class import MLP
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 from utils import *
 
+import numpy as np
 
-torch.manual_seed(1)
+
+torch.manual_seed(2)
 
 
 EPOCH = 30
@@ -41,6 +43,16 @@ test_y = test_data.test_labels[:2000]
 
 # defining hooks
 def fixed_point_hook(self, input, output):
+    '''
+    if step % 50 == 0 and 'ReLU' == self.__class__.__name__:
+        print('sum > 1 :', ((output.data)>1).sum())
+        print('sum > 2 :', ((output.data) > 2).sum())
+        print('sum > 3 :', ((output.data) > 3).sum())
+        print('sum > 3.9 :', ((output.data) > 3.9).sum())
+    '''
+
+    # print('Inside ' + self.__class__.__name__ + ' forward')
+    # print('Inside ' + self.__class__.__name__ + ' backward')
     apply_format_inplace('FXP', output.data, IL, FL)
 
 
@@ -97,9 +109,12 @@ init.normal(linear[0].data, mean=0, std=0.01)
 init.normal(linear2[0].data, mean=0, std=0.01)
 init.normal(out[0].data, mean=0, std=0.01)
 
-
+train_loss_y = np.array([])
+train_loss_x = np.array([])
+i=0
 
 for epoch in range(EPOCH):
+    avg_loss = np.array([])
     for step, (x,y) in enumerate(train_loader):
         b_x = Variable(x,requires_grad = True)
         b_y = Variable(y)
@@ -121,6 +136,22 @@ for epoch in range(EPOCH):
         if step % 50 == 0:
             print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0])
 
+        avg_loss = np.append(avg_loss, loss.data[0])
+
+
+        '''
+        if step % 120 == 0:
+            print('printing!!!')
+            train_loss_y = np.append(train_loss_y,loss.data[0])
+            train_loss_x = np.append(train_loss_x,i)
+            plt.plot(train_loss_x, train_loss_y, 'r-', lw=2)
+            plt.pause(0.05)
+            #plt.show(block=False)
+            i = i + 1
+        
+        train_loss_x = train_loss_x.astype(int)
+        '''
+
         '''
         if step % 50 == 0:
             test_output = mlp(test_x)
@@ -128,6 +159,19 @@ for epoch in range(EPOCH):
             accuracy = sum(pred_y == test_y)/float(test_y.size(0))
             print('Epoch: ',epoch,'| train loss : %.4f' %loss.data[0], '| test accuracy: %.2f' % accuracy)
         '''
+
+    #per epoch updating......
+    train_loss_y = np.append(train_loss_y,np.mean(avg_loss))
+    train_loss_x = np.append(train_loss_x, epoch)
+    plt.semilogy(train_loss_x, train_loss_y, 'r-', lw=2)
+    plt.xlabel('Epoch')
+    plt.ylabel('Training error')
+    plt.title('IL = 4, FL = 14')
+    plt.grid(True)
+    plt.pause(0.05)
+
+
+plt.show()
 
 if save_model:
     print('Saving model......')
