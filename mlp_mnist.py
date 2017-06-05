@@ -14,17 +14,24 @@ import numpy as np
 torch.manual_seed(2)
 
 
-EPOCH = 30
+EPOCH = 0
 BATCH_SIZE = 100
 LR = 0.1
 DOWNLOAD_MNIST = True
 save_model = 0
 
-
-IL = 4  # IL = torch.IntTensor([4])
+SI = 1 # reminder for sign bit
+IL = 4  # IL = torch.IntTensor([4])   Not including the signed bit
 FL = 14 # FL = torch.IntTensor([12])
-nonideal_train = 1
-nonideal_inference = 1
+nonideal_train = 1 #fixed point train
+nonideal_inference = 1 #fixed point inference
+
+#enabling ntv which increases bit flip probability
+en_ntv = 1
+p_flip = 0.000001
+flip_len = IL + FL + SI # flip all bits
+
+
 
 train_data = torchvision.datasets.MNIST(
     root = './mnist/',
@@ -57,14 +64,16 @@ def fixed_point_hook(self, input, output):
 
 
 def fixed_point_back_hook(self, grad_in, grad_out):
-    #print('Inside ' + self.__class__.__name__ + ' backward')
-    #print('grad_output size:', grad_out[0].size())
-    #print(grad_out[0])
-    #print('grad_input size:', grad_in[0].size())
-    #print(grad_in[0])
-    #print('grad_input size:', grad_in[1].size())
-    #print('grad_input size:', grad_in[2].size())
-    #print('grad_input tuple size: ', grad_in.__len__())
+    '''
+    print('Inside ' + self.__class__.__name__ + ' backward')
+    print('grad_output size:', grad_out[0].size())
+    print(grad_out[0])
+    print('grad_input size:', grad_in[0].size())
+    print(grad_in[0])
+    print('grad_input size:', grad_in[1].size())
+    print('grad_input size:', grad_in[2].size())
+    print('grad_input tuple size: ', grad_in.__len__())
+    '''
     if grad_in.__len__() > 1:
         #print('grad_input size:', grad_in[1].size())
         apply_format_inplace('FXP', grad_in[0].data, IL, FL)
@@ -179,16 +188,21 @@ if save_model:
     #>>>>>>>>Test neural network performance
 
 
-#>>>>>>>>Regulate neural network weight into fixed point counterpart
+#>>>>>>>>Regulate trained neural network weight into fixed point counterpart, then do inference
 if nonideal_inference:
     apply_format_inplace('FXP',linear[0].data,IL,FL) # weight regulation
-    apply_format_inplace('FXP', linear[1].data, IL, FL)
+    apply_format_inplace('FXP', linear[1].data, IL, FL) # bias regulation
     apply_format_inplace('FXP',linear2[0].data,IL,FL) # weight regulation
-    apply_format_inplace('FXP', linear2[1].data, IL, FL)
+    apply_format_inplace('FXP', linear2[1].data, IL, FL) # bias regulation
     apply_format_inplace('FXP',out[0].data,IL,FL)    # weight regulation
-    apply_format_inplace('FXP', out[1].data, IL, FL)
+    apply_format_inplace('FXP', out[1].data, IL, FL) # bias regulation
     apply_format_inplace('FXP',test_x.data,IL,FL)    # input regulation
     #apply_bitflip(linear[0].data,0.5,3,10,13)
+
+if en_ntv:
+    apply_bitflip(linear[0].data,p_flip,IL,FL,flip_len)
+    #apply_bitflip(x,p,IL,FL,flip_length):
+
 
 #print(type(test_x)) #<class 'torch.autograd.variable.Variable'>
 #print(type(test_x.data)) #<class 'torch.FloatTensor'>
