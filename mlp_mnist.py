@@ -31,8 +31,8 @@ nonideal_inference = 1 #fixed point inference
 #enabling ntv which increases bit flip probability
 en_ntv_inference = 1
 en_ntv_train = 0
-p_flip = 0.00001
-flip_len = IL + FL + SI - 1 # flip all bits
+p_flip = 0.0001
+flip_len = IL + FL + SI # flip all bits
 
 
 
@@ -216,6 +216,8 @@ if nonideal_inference:
     apply_format_inplace('FXP', out[1].data, IL, FL) # bias regulation
     apply_format_inplace('FXP',test_x.data,IL,FL)    # input regulation
     #apply_bitflip(linear[0].data,0.5,3,10,13)
+
+
 
 if en_ntv_inference:
     print("injecting bit flip fault model...")
