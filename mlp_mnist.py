@@ -19,17 +19,20 @@ BATCH_SIZE = 100
 LR = 0.1
 DOWNLOAD_MNIST = True
 save_model = 0
+load_model = 1
+en_plot = 0
 
 SI = 1 # reminder for sign bit
-IL = 4  # IL = torch.IntTensor([4])   Not including the signed bit
+IL = 5  # IL = torch.IntTensor([4])   Not including the signed bit
 FL = 14 # FL = torch.IntTensor([12])
 nonideal_train = 1 #fixed point train
 nonideal_inference = 1 #fixed point inference
 
 #enabling ntv which increases bit flip probability
-en_ntv = 1
-p_flip = 0.000001
-flip_len = IL + FL + SI # flip all bits
+en_ntv_inference = 1
+en_ntv_train = 0
+p_flip = 0.00001
+flip_len = IL + FL + SI - 1 # flip all bits
 
 
 
@@ -134,13 +137,18 @@ for epoch in range(EPOCH):
         loss.backward()
         optimizer.step()
 
-        if(nonideal_train):
+        if nonideal_train:
             apply_format_inplace('FXP', linear[0].data, IL, FL)#weight
             apply_format_inplace('FXP', linear[1].data, IL, FL)#bias
             apply_format_inplace('FXP', linear2[0].data, IL, FL)#weight
             apply_format_inplace('FXP', linear2[1].data, IL, FL)#bias
             apply_format_inplace('FXP', out[0].data, IL, FL)#weight
             apply_format_inplace('FXP', out[1].data, IL, FL)#bias
+
+        if en_ntv_train:
+            apply_bitflip(linear[0].data, p_flip, IL, FL, flip_len)
+            apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
+            apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
 
         if step % 50 == 0:
             print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0])
@@ -170,22 +178,32 @@ for epoch in range(EPOCH):
         '''
 
     #per epoch updating......
-    train_loss_y = np.append(train_loss_y,np.mean(avg_loss))
-    train_loss_x = np.append(train_loss_x, epoch)
-    plt.semilogy(train_loss_x, train_loss_y, 'r-', lw=2)
-    plt.xlabel('Epoch')
-    plt.ylabel('Training error')
-    plt.title('IL = 4, FL = 14')
-    plt.grid(True)
-    plt.pause(0.05)
+    if en_plot:
+        train_loss_y = np.append(train_loss_y,np.mean(avg_loss))
+        train_loss_x = np.append(train_loss_x, epoch)
+        plt.semilogy(train_loss_x, train_loss_y, 'r-', lw=2)
+        plt.xlabel('Epoch')
+        plt.ylabel('Training error')
+        plt.title('IL = 4, FL = 14')
+        plt.grid(True)
+        plt.pause(0.05)
 
 
 plt.show()
 
 if save_model:
     print('Saving model......')
-    torch.save(mlp, 'mlp_mnist2.pkl')
+    torch.save(mlp, 'mlp_mnist_10epoch.pkl')
     #>>>>>>>>Test neural network performance
+
+if load_model:
+    print('Loading model......')
+    mlp = torch.load('mlp_mnist_10epoch.pkl')
+
+#>>>>>>>>>>>>>>>>>>>>>>>>Inference
+linear = list(mlp.hidden1.parameters())
+linear2 = list(mlp.hidden2.parameters())
+out = list(mlp.out.parameters())
 
 
 #>>>>>>>>Regulate trained neural network weight into fixed point counterpart, then do inference
@@ -199,8 +217,11 @@ if nonideal_inference:
     apply_format_inplace('FXP',test_x.data,IL,FL)    # input regulation
     #apply_bitflip(linear[0].data,0.5,3,10,13)
 
-if en_ntv:
+if en_ntv_inference:
+    print("injecting bit flip fault model...")
     apply_bitflip(linear[0].data,p_flip,IL,FL,flip_len)
+    apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
+    apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
     #apply_bitflip(x,p,IL,FL,flip_length):
 
 
@@ -210,7 +231,7 @@ if en_ntv:
 
 #>>>>>>>>add forward hooker on each layer if non-ideal inference
 if nonideal_inference and (not nonideal_train ):
-    print('applied!!!')
+    #print('applied!!!')
     mlp.hidden1.register_forward_hook(fixed_point_hook)
     mlp.activation.register_forward_hook(fixed_point_hook)
     mlp.hidden2.register_forward_hook(fixed_point_hook)
