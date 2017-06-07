@@ -6,8 +6,14 @@ import torch.nn.init as init
 from torch.autograd import Variable
 import torch.utils.data as Data
 from mlp_class import MLP
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+
 from utils import *
+import numpy as np
+import os
 
 load_model = 1
 BATCH_SIZE = 100
@@ -48,35 +54,60 @@ def fixed_point_back_hook(self, grad_in, grad_out):
         apply_format_inplace('FXP', grad_in[2].data, IL, FL)#bias
         return grad_in
 
+has_mat = 0
+#flip_range = [20,18,16,12,8]
+#p_flip_range = [0.001,0.0001,0.00001,0.000001,0.0000001]
 
-flip_range = [20,18,16,12,8]
-p_flip_range = [0.001,0.00001,0.0000001]
+flip_range = [20,18]
+p_flip_range = [0.001,0.0001]
+
+accuracy_mat = np.zeros([len(flip_range), len(p_flip_range)],dtype= float)
 
 
+if  not os.path.isfile('accuracy_mat.npy') :
+    for m in range(len(flip_range)):
+        for n in range(len(p_flip_range)):
+            flip_len = flip_range[m]
+            p_flip = p_flip_range[n]
+            temp = 0
+            for i in range(epoch_test):
+                if load_model:
+                    print('Loading model......')
+                    mlp = torch.load('mlp_mnist_10epoch.pkl')
 
-for m in range(len(flip_range)):
-    for n in range(len(p_flip_range)):
-        flip_len = flip_range[m]
-        p_flip = p_flip_range[n]
-        temp = 0
-        for i in range(epoch_test):
-            if load_model:
-                print('Loading model......')
-                mlp = torch.load('mlp_mnist_10epoch.pkl')
+                linear = list(mlp.hidden1.parameters())
+                linear2 = list(mlp.hidden2.parameters())
+                out = list(mlp.out.parameters())
 
-            linear = list(mlp.hidden1.parameters())
-            linear2 = list(mlp.hidden2.parameters())
-            out = list(mlp.out.parameters())
+                apply_bitflip(linear[0].data, p_flip, IL, FL, flip_len)
+                apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
+                apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
 
-            apply_bitflip(linear[0].data, p_flip, IL, FL, flip_len)
-            apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
-            apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
+                test_output = mlp(test_x)
+                pred_y = torch.max(test_output, 1)[1].data.squeeze()
+                accuracy = sum(pred_y == test_y)/float(test_y.size(0))
+                temp = temp+accuracy
 
-            test_output = mlp(test_x)
-            pred_y = torch.max(test_output, 1)[1].data.squeeze()
-            accuracy = sum(pred_y == test_y)/float(test_y.size(0))
-            temp = temp+accuracy
-            print(accuracy, 'prediction accuracy!')
-            print('End of testing!')
+            temp = temp/epoch_test
+            print(accuracy, 'averaged prediction accuracy!')
+            accuracy_mat[m][n]=temp
 
-        temp = temp/epoch_test
+    np.save("accuracy_mat.npy",accuracy_mat)
+    print('finished testing!... start ploting :)')
+else:
+    accuracy_mat = np.load('accuracy_mat.npy')
+    print('load accuracy_mat.npy!... start ploting :)')
+    print(accuracy_mat)
+
+#x=flip_range[::-1]
+x = flip_range
+
+
+for cc in range(len(p_flip_range)):
+    plt.plot(x,accuracy_mat[...,cc],linewidth=3)
+
+plt.xlabel('flip length')
+plt.ylabel('Averaged Accuracy')
+plt.grid(True)
+plt.savefig('foo.jpg')
+plt.show()

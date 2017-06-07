@@ -63,7 +63,7 @@ def apply_bitflip(x,p,IL,FL,flip_length):  #IL here means integer part not inclu
     changes = changes.type(torch.FloatTensor)
     x.add_(changes)
     # considering the negative x
-    print('worked!')
+    #print('worked!')
 
 
 
