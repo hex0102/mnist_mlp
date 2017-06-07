@@ -6,8 +6,8 @@ import torch.nn.init as init
 from torch.autograd import Variable
 import torch.utils.data as Data
 from mlp_class import MLP
-import matplotlib
-matplotlib.use('Agg')
+#import matplotlib
+#matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
@@ -55,11 +55,11 @@ def fixed_point_back_hook(self, grad_in, grad_out):
         return grad_in
 
 has_mat = 0
-#flip_range = [20,18,16,12,8]
-#p_flip_range = [0.001,0.0001,0.00001,0.000001,0.0000001]
+flip_range = [20,18,16,12,8]
+p_flip_range = [0.001,0.0001,0.00001,0.000001,0.0000001]
 
-flip_range = [20,18]
-p_flip_range = [0.001,0.0001]
+#flip_range = [20,18]
+#p_flip_range = [0.001,0.0001]
 
 accuracy_mat = np.zeros([len(flip_range), len(p_flip_range)],dtype= float)
 
@@ -102,10 +102,13 @@ else:
 #x=flip_range[::-1]
 x = flip_range
 
+fig = plt.figure()
+ax = fig.add_subplot(1,1,1)
 
 for cc in range(len(p_flip_range)):
-    plt.plot(x,accuracy_mat[...,cc],linewidth=3)
+    ax.plot(x,accuracy_mat[...,cc],linewidth=3,label='p = '+str(p_flip_range[cc]))#str(p_flip_range[cc]))
 
+ax.legend()
 plt.xlabel('flip length')
 plt.ylabel('Averaged Accuracy')
 plt.grid(True)
