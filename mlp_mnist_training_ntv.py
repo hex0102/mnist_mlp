@@ -32,7 +32,7 @@ nonideal_inference = 1  # fixed point inference
 
 # enabling ntv which increases bit flip probability
 en_ntv_inference = 1
-en_ntv_train = 0
+en_ntv_train = 1
 p_flip = 0.0001
 flip_len = IL + FL + SI  # flip all bits
 
@@ -92,12 +92,12 @@ def fixed_point_back_hook(self, grad_in, grad_out):
 
 
 has_mat = 0
-flip_range = [20,18,16,12,8]
-p_flip_range = [0.001,0.0001,0.00001,0.000001,0.0000001]
+flip_range = [20,18,16,8]
+p_flip_range = [0.001,0.0001,0.00001,0.0000001]
 
 #flip_range = [20,18]
 #p_flip_range = [0.001,0.0001]
-mc_epoch = 5
+mc_epoch = 1
 
 loss_mat = np.zeros([len(flip_range), len(p_flip_range), mc_epoch, EPOCH],dtype=float)
 
