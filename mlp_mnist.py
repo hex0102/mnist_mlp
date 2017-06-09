@@ -14,7 +14,7 @@ import numpy as np
 torch.manual_seed(2)
 
 
-EPOCH = 0
+EPOCH = 1
 BATCH_SIZE = 100
 LR = 0.1
 DOWNLOAD_MNIST = True
