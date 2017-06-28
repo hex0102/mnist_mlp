@@ -10,7 +10,7 @@ from cnn_class import CNN
 import torch.optim as optim
 from utils import *
 
-# test modification
+# test modification twice
 ########################################################################
 # 1. Defining hardware non-idealty
 
