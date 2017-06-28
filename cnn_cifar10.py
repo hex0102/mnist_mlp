@@ -10,6 +10,7 @@ from cnn_class import CNN
 import torch.optim as optim
 from utils import *
 
+# test modification
 ########################################################################
 # 1. Defining hardware non-idealty
 
@@ -21,7 +22,7 @@ nonideal_inference = 1 #fixed point inference
 
 en_ntv_inference = 1
 en_ntv_train = 0
-p_flip = 0.0001
+p_flip = 0.00001
 flip_len = IL + FL + SI # flip all bits
 
 save_model = 1
