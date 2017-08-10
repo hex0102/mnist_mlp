@@ -16,7 +16,7 @@ import numpy as np
 
 
 
-EPOCH = 12
+EPOCH = 0
 BATCH_SIZE = 100
 LR = 0.1
 DOWNLOAD_MNIST = True
@@ -189,8 +189,11 @@ for m in range(len(flip_range)):
     #plt.savefig('foo.jpg')
     #plt.show()
 
-np.save("loss_mat.npy",loss_mat)
-np.savetxt("loss_mat.txt",loss_mat,delimiter=" ")
+#np.save("loss_mat.npy",loss_mat)
+#np.savetxt("loss_mat.txt",loss_mat,delimiter=" ")
+
+loss_mat=np.load('loss_mat.npy')
+print(loss_mat)
 
 
 if save_model:

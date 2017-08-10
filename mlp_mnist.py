@@ -14,19 +14,19 @@ import numpy as np
 torch.manual_seed(2)
 
 
-EPOCH = 1
-BATCH_SIZE = 100
+EPOCH = 2
+BATCH_SIZE = 244
 LR = 0.1
 DOWNLOAD_MNIST = True
 save_model = 0
-load_model = 1
+load_model = 0
 en_plot = 0
 
 SI = 1 # reminder for sign bit
 IL = 5  # IL = torch.IntTensor([4])   Not including the signed bit
 FL = 14 # FL = torch.IntTensor([12])
 nonideal_train = 1 #fixed point train
-nonideal_inference = 1 #fixed point inference
+nonideal_inference = 0 #fixed point inference
 
 #enabling ntv which increases bit flip probability
 en_ntv_inference = 1
@@ -34,7 +34,7 @@ en_ntv_train = 0
 p_flip = 0.0001
 flip_len = IL + FL + SI # flip all bits
 
-
+grads = [] #gradients are inside
 
 train_data = torchvision.datasets.MNIST(
     root = './mnist/',
@@ -67,8 +67,14 @@ def fixed_point_hook(self, input, output):
 
 
 def fixed_point_back_hook(self, grad_in, grad_out):
+
+    #print('Inside ' + self.__class__.__name__ + ' backward')
     '''
-    print('Inside ' + self.__class__.__name__ + ' backward')
+    print('grad_output size:', grad_out[0].size())
+    print('grad_input size:', grad_in[0].size())
+    print('grad_input size:', grad_in[1].size())
+    print('grad_input size:', grad_in[2].size())
+    
     print('grad_output size:', grad_out[0].size())
     print(grad_out[0])
     print('grad_input size:', grad_in[0].size())
@@ -77,16 +83,27 @@ def fixed_point_back_hook(self, grad_in, grad_out):
     print('grad_input size:', grad_in[2].size())
     print('grad_input tuple size: ', grad_in.__len__())
     '''
+    #grads[self.__class__.__name__] = grad_in[0].data;
+    grads.append(grad_in[0].data);
     if grad_in.__len__() > 1:
         #print('grad_input size:', grad_in[1].size())
         apply_format_inplace('FXP', grad_in[0].data, IL, FL)
         apply_format_inplace('FXP', grad_in[1].data, IL, FL)#weight
         apply_format_inplace('FXP', grad_in[2].data, IL, FL)#bias
+
         #print(type(grad_in[0]))
         #print(type(grad_in[1]))
         #print(type(grad_in[2]))
         return grad_in
 
+
+def mse_loss(x, y, size_average=False, per_element=False):
+    loss_per_element = (x - y) ** 2
+    if per_element:
+        return loss_per_element.sum(1)
+    if size_average:
+        return loss_per_element.mean()
+    return loss_per_element.sum()
 
 
 
@@ -132,7 +149,21 @@ for epoch in range(EPOCH):
         b_y = Variable(y)
 
         output = mlp(b_x)
-        loss = loss_func(output,b_y)
+
+        for i in range(10):
+            ind = torch.zeros(b_x.size()[0], 10)
+            ind[:, i] = 1
+            output.backward(ind, retain_variables=True)
+
+        loss = loss_func(output, b_y)
+        mlp.zero_grad()
+        '''
+        for i in range(BATCH_SIZE):
+            output[i:i+1].backward(torch.ones(2,10),retain_variables=True)
+            loss = loss_func(output,b_y)
+            mlp.zero_grad()
+        '''
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()

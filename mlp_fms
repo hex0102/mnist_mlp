@@ -1,0 +1,363 @@
+import torch
+import torchvision
+import torch.nn as nn
+import torch.nn.init as init
+from torch.autograd import Variable
+import torch.utils.data as Data
+from mlp_class import MLP
+import matplotlib.pyplot as plt
+from utils import *
+
+import numpy as np
+
+#GPU configurations
+torch.set_num_threads(2)
+torch.cuda.set_device(0)
+
+
+torch.manual_seed(2)
+
+EPOCH = 2
+BATCH_SIZE = 128
+LR = 1#0.1
+DOWNLOAD_MNIST = True
+save_model = 0
+load_model = 0
+en_plot = 0
+collect_grads = 1
+
+
+N_layer = 2
+SI = 1  # reminder for sign bit
+IL = 5  # IL = torch.IntTensor([4])   Not including the signed bit
+FL = 14  # FL = torch.IntTensor([12])
+nonideal_train = 0  # fixed point train
+nonideal_inference = 0  # fixed point inference
+
+# enabling ntv which increases bit flip probability
+en_ntv_inference = 0
+en_ntv_train = 0
+p_flip = 0.0001
+flip_len = IL + FL + SI  # flip all bits
+
+input_grads = []  # gradients are inside
+y_out = []
+
+train_data = torchvision.datasets.MNIST(
+    root='./mnist/',
+    train=True,
+    transform=torchvision.transforms.ToTensor(),
+    download=DOWNLOAD_MNIST,
+)
+
+test_data = torchvision.datasets.MNIST(root='./mnist/', train=False)
+
+train_loader = Data.DataLoader(dataset=train_data, batch_size=BATCH_SIZE, shuffle=True)
+
+test_x = Variable(torch.unsqueeze(test_data.test_data, dim=1), volatile=True).type(torch.FloatTensor)[:2000] / 255.
+test_y = test_data.test_labels[:2000]
+
+#flat minimal parameters
+SMALL_D = 0.000001
+EPSILON = torch.cuda.FloatTensor([0.01])
+K = 100
+
+
+# defining hooks
+def fixed_point_hook(self, input, output):
+    '''
+    if step % 50 == 0 and 'ReLU' == self.__class__.__name__:
+        print('sum > 1 :', ((output.data)>1).sum())
+        print('sum > 2 :', ((output.data) > 2).sum())
+        print('sum > 3 :', ((output.data) > 3).sum())
+        print('sum > 3.9 :', ((output.data) > 3.9).sum())
+    '''
+
+    # print('Inside ' + self.__class__.__name__ + ' forward')
+    # print('Inside ' + self.__class__.__name__ + ' backward')
+    apply_format_inplace('FXP', output.data, IL, FL)
+
+
+def fixed_point_back_hook(self, grad_in, grad_out):
+    # print('Inside ' + self.__class__.__name__ + ' backward')
+    '''
+    print('grad_output size:', grad_out[0].size())
+    print('grad_input size:', grad_in[0].size())
+    print('grad_input size:', grad_in[1].size())
+    print('grad_input size:', grad_in[2].size())
+
+    print('grad_output size:', grad_out[0].size())
+    print(grad_out[0])
+    print('grad_input size:', grad_in[0].size())
+    print(grad_in[0])
+    print('grad_input size:', grad_in[1].size())
+    print('grad_input size:', grad_in[2].size())
+    print('grad_input tuple size: ', grad_in.__len__())
+    '''
+    # grads[self.__class__.__name__] = grad_in[0].data;
+    #grads.append(grad_in[0].data);
+    if grad_in.__len__() > 1:
+        # print('grad_input size:', grad_in[1].size())
+        apply_format_inplace('FXP', grad_in[0].data, IL, FL)
+        apply_format_inplace('FXP', grad_in[1].data, IL, FL)  # weight
+        apply_format_inplace('FXP', grad_in[2].data, IL, FL)  # bias
+
+        # print(type(grad_in[0]))
+        # print(type(grad_in[1]))
+        # print(type(grad_in[2]))
+        return grad_in
+
+
+def get_ingrads(self, grad_in, grad_out):
+    input_grads.append(grad_in[0].data)
+
+def get_y(self, input, output):
+    y_out.append(input)
+
+
+
+
+
+def mse_loss(x, y, size_average=False, per_element=False):
+    loss_per_element = (x - y) ** 2
+    if per_element:
+        return loss_per_element.sum(1)
+    if size_average:
+        return loss_per_element.mean()
+    return loss_per_element.sum()
+
+
+
+
+
+mlp = MLP().cuda()
+optimizer = torch.optim.SGD(mlp.parameters(), lr=LR)  # , momentum=0.9)
+loss_func = nn.CrossEntropyLoss().cuda()
+
+# add backward hooker on each layer, to regulate the gradient to fixed point representation
+if (collect_grads):
+    mlp.hidden1.register_backward_hook(get_ingrads)
+    mlp.activation.register_backward_hook(get_ingrads)
+    mlp.hidden2.register_backward_hook(get_ingrads)
+    mlp.activation2.register_backward_hook(get_ingrads)
+    # add foward hooker on each layer, , to regulate the layer out to fixed point representation
+    mlp.hidden1.register_forward_hook(get_y)
+    mlp.activation.register_forward_hook(get_y)
+    mlp.hidden2.register_forward_hook(get_y)
+    mlp.activation2.register_forward_hook(get_y)
+
+# >>>>>>>>Dump neural network weight to list
+linear = list(mlp.hidden1.parameters())
+init.constant(linear[1].data, 0)
+linear2 = list(mlp.hidden2.parameters())
+init.constant(linear2[1].data, 0)
+out = list(mlp.out.parameters())
+init.constant(out[1].data, 0)
+
+init.normal(linear[0].data, mean=0, std=0.01)
+init.normal(linear2[0].data, mean=0, std=0.01)
+init.normal(out[0].data, mean=0, std=0.01)
+
+train_loss_y = np.array([])
+train_loss_x = np.array([])
+i = 0
+
+dyds=[]
+dydy=[]
+
+for epoch in range(EPOCH):
+    avg_loss = np.array([])
+    for step, (x, y) in enumerate(train_loader):
+        b_x = Variable(x.cuda(), requires_grad=True)
+        b_y = Variable(y.cuda())
+
+        output = mlp(b_x)
+        dydw = []
+        for i in range(10):
+            ind = torch.zeros(b_x.size()[0], 10).cuda()
+            ind[:, i] = 1
+            output.backward(ind, retain_variables=True)
+            dyidw=[]
+            for j in range(N_layer):
+                #print(j)
+                y_part = y_out[2*j][0].data
+                y_part = y_part.unsqueeze(1)
+                ys = input_grads[N_layer-2*j]
+                ys = ys.unsqueeze(N_layer)
+                yw = torch.bmm(ys,y_part)
+                #yw.add_(torch.mul((torch.abs(yw)<SMALL_D),SMALL_D))
+                dyidw.append(yw+torch.mul((torch.abs(yw)<SMALL_D).type(torch.cuda.FloatTensor),SMALL_D))
+                mlp.zero_grad()
+            dydw.append(dyidw)
+            mlp.zero_grad()
+            #for j in range(2):
+            #    y_out[2*j]
+        t1 = []
+        for n in range(N_layer):
+            t1.append(dydw[0][n].clone().zero_())
+            for m in range(10):
+                t1[n].add_(torch.mul(dydw[m][n],dydw[m][n]))
+
+        t2 = torch.zeros(10,BATCH_SIZE).cuda()
+
+
+        for m in range(10):
+            for n in range(N_layer):
+                t2[m] += torch.sum(torch.sum(torch.abs(torch.div(dydw[m][n],torch.sqrt(t1[n]))),1),1)
+
+        t2.transpose_(0,1)
+
+        t3 = torch.sum(torch.mul(t2,t2),1)
+
+        delta_w = []
+        delta_min = torch.cuda.FloatTensor(N_layer,BATCH_SIZE);
+        eps_t3 = torch.sqrt(torch.mul(torch.reciprocal(t3),EPSILON)).unsqueeze(1).unsqueeze(1)
+        for n in range(N_layer):
+            delta_w.append(torch.mul(torch.sqrt(torch.reciprocal(t1[n])),eps_t3))
+            delta_min[n]=torch.min(torch.min(delta_w[n],1)[0],1)[0]
+            #delta_min.append(torch.min(torch.min(delta_w[n],1)[0],1)[0])
+
+        d_min = (torch.min(delta_min,0)[0]).unsqueeze(1).unsqueeze(1)*K
+        #d_min.transpose_(0,1)
+        #for n in range(N_layer):
+
+
+        insignificant=[]
+        weights = torch.FloatTensor(N_layer,BATCH_SIZE)
+        for n in range(N_layer):
+            insignificant.append(torch.lt(delta_w[n], d_min).type(torch.cuda.FloatTensor))
+            weights[n] = torch.sum(torch.sum(insignificant[n],1),1)
+        weights = torch.sum(weights,0)
+            #t1[n]=torch.mul(t1[n],insignificant[n].type(torch.cuda.FloatTensor))
+
+        #dydw[m][n]-- b_s*higher*lower
+        #update variables after having marked
+        t2 = torch.zeros(10,BATCH_SIZE).cuda()
+        for m in range(10):
+            for n in range(N_layer):
+                t2[m] += torch.sum(torch.sum(torch.abs(torch.div(dydw[m][n]*insignificant[n],torch.sqrt(t1[n]))),1),1)
+
+
+        t2.transpose_(0,1)
+        t3 = torch.sum(torch.mul(t2,t2),1)
+
+        for n in range(N_layer):
+            
+
+        loss = loss_func(output, b_y)
+
+        '''
+        for i in range(BATCH_SIZE):
+            output[i:i+1].backward(torch.ones(2,10),retain_variables=True)
+            loss = loss_func(output,b_y)
+            mlp.zero_grad()
+        '''
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if nonideal_train:
+            apply_format_inplace('FXP', linear[0].data, IL, FL)  # weight
+            apply_format_inplace('FXP', linear[1].data, IL, FL)  # bias
+            apply_format_inplace('FXP', linear2[0].data, IL, FL)  # weight
+            apply_format_inplace('FXP', linear2[1].data, IL, FL)  # bias
+            apply_format_inplace('FXP', out[0].data, IL, FL)  # weight
+            apply_format_inplace('FXP', out[1].data, IL, FL)  # bias
+
+        if en_ntv_train:
+            apply_bitflip(linear[0].data, p_flip, IL, FL, flip_len)
+            apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
+            apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
+
+        if step % 50 == 0:
+            print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0])
+
+        avg_loss = np.append(avg_loss, loss.data[0])
+
+        '''
+        if step % 120 == 0:
+            print('printing!!!')
+            train_loss_y = np.append(train_loss_y,loss.data[0])
+            train_loss_x = np.append(train_loss_x,i)
+            plt.plot(train_loss_x, train_loss_y, 'r-', lw=2)
+            plt.pause(0.05)
+            #plt.show(block=False)
+            i = i + 1
+
+        train_loss_x = train_loss_x.astype(int)
+        '''
+
+        '''
+        if step % 50 == 0:
+            test_output = mlp(test_x)
+            pred_y = torch.max(test_output,1)[1].data.squeeze()
+            accuracy = sum(pred_y == test_y)/float(test_y.size(0))
+            print('Epoch: ',epoch,'| train loss : %.4f' %loss.data[0], '| test accuracy: %.2f' % accuracy)
+        '''
+
+    # per epoch updating......
+    if en_plot:
+        train_loss_y = np.append(train_loss_y, np.mean(avg_loss))
+        train_loss_x = np.append(train_loss_x, epoch)
+        plt.semilogy(train_loss_x, train_loss_y, 'r-', lw=2)
+        plt.xlabel('Epoch')
+        plt.ylabel('Training error')
+        plt.title('IL = 4, FL = 14')
+        plt.grid(True)
+        plt.pause(0.05)
+
+plt.show()
+
+if save_model:
+    print('Saving model......')
+    torch.save(mlp, 'mlp_mnist_10epoch.pkl')
+    # >>>>>>>>Test neural network performance
+
+if load_model:
+    print('Loading model......')
+    mlp = torch.load('mlp_mnist_10epoch.pkl')
+
+# >>>>>>>>>>>>>>>>>>>>>>>>Inference
+linear = list(mlp.hidden1.parameters())
+linear2 = list(mlp.hidden2.parameters())
+out = list(mlp.out.parameters())
+
+# >>>>>>>>Regulate trained neural network weight into fixed point counterpart, then do inference
+if nonideal_inference:
+    apply_format_inplace('FXP', linear[0].data, IL, FL)  # weight regulation
+    apply_format_inplace('FXP', linear[1].data, IL, FL)  # bias regulation
+    apply_format_inplace('FXP', linear2[0].data, IL, FL)  # weight regulation
+    apply_format_inplace('FXP', linear2[1].data, IL, FL)  # bias regulation
+    apply_format_inplace('FXP', out[0].data, IL, FL)  # weight regulation
+    apply_format_inplace('FXP', out[1].data, IL, FL)  # bias regulation
+    apply_format_inplace('FXP', test_x.data, IL, FL)  # input regulation
+    # apply_bitflip(linear[0].data,0.5,3,10,13)
+
+if en_ntv_inference:
+    print("injecting bit flip fault model...")
+    apply_bitflip(linear[0].data, p_flip, IL, FL, flip_len)
+    apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
+    apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
+    # apply_bitflip(x,p,IL,FL,flip_length):
+
+# print(type(test_x)) #<class 'torch.autograd.variable.Variable'>
+# print(type(test_x.data)) #<class 'torch.FloatTensor'>
+
+
+# >>>>>>>>add forward hooker on each layer if non-ideal inference
+if nonideal_inference and (not nonideal_train):
+    # print('applied!!!')
+    mlp.hidden1.register_forward_hook(fixed_point_hook)
+    mlp.activation.register_forward_hook(fixed_point_hook)
+    mlp.hidden2.register_forward_hook(fixed_point_hook)
+    mlp.activation2.register_forward_hook(fixed_point_hook)
+    mlp.out.register_forward_hook(fixed_point_hook)
+
+# >>>>>>>> Testing!!!
+test_output = mlp(test_x)
+pred_y = torch.max(test_output, 1)[1].data.squeeze()
+accuracy = sum(pred_y == test_y) / float(test_y.size(0))
+
+print(accuracy, 'prediction accuracy!')
+print('End of testing!')

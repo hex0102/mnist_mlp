@@ -3,7 +3,7 @@
   <component name="WebServers">
     <option name="servers">
       <webServer id="4508cd76-3d7f-474a-81c7-1bc8b98b1430" name="ubuntu" url="http://172.27.115.136">
-        <fileTransfer host="172.27.115.136" port="22" rootFolder="/home/hexin/project/dac2018" accessType="SFTP">
+        <fileTransfer host="172.27.115.136" port="22" rootFolder="/home/xzlab/workspace/torchplayground/mnist_mlp" accessType="SFTP">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" />
           </advancedOptions>

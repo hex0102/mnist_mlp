@@ -21,14 +21,14 @@ nonideal_inference = 1 #fixed point inference
 
 en_ntv_inference = 1
 en_ntv_train = 0
-p_flip = 0.0001
+p_flip = 0.000001
 flip_len = IL + FL + SI # flip all bits
 
-save_model = 1
-load_model = 0
+save_model = 0
+load_model = 1
 en_plot = 0
 
-EPOCH = 1
+EPOCH = 0
 
 ########################################################################
 # 2. Preparing CIFAR10 data
@@ -151,7 +151,12 @@ for epoch in range(EPOCH):  # loop over the dataset multiple times
             apply_format_inplace('FXP', linear3[0].data, IL, FL)  # weight regulation
             apply_format_inplace('FXP', linear3[1].data, IL, FL)  # bias regulation
 
-
+        if en_ntv_train:
+            apply_bitflip(juanji1[0].data, p_flip, IL, FL, flip_len)
+            apply_bitflip(juanji2[0].data, p_flip, IL, FL, flip_len)
+            apply_bitflip(linear1[0].data, p_flip, IL, FL, flip_len)
+            apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
+            apply_bitflip(linear3[0].data, p_flip, IL, FL, flip_len)
 
 
 
@@ -197,6 +202,15 @@ if nonideal_inference:
     apply_format_inplace('FXP', linear2[1].data, IL, FL) # bias regulation
     apply_format_inplace('FXP',linear3[0].data,IL,FL)    # weight regulation
     apply_format_inplace('FXP', linear3[1].data, IL, FL) # bias regulation
+
+
+if en_ntv_inference:
+    print("injecting bit flip fault model...")
+    apply_bitflip(juanji1[0].data,p_flip,IL,FL,flip_len)
+    apply_bitflip(juanji2[0].data, p_flip, IL, FL, flip_len)
+    apply_bitflip(linear1[0].data, p_flip, IL, FL, flip_len)
+    apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
+    apply_bitflip(linear3[0].data, p_flip, IL, FL, flip_len)
 
 
 

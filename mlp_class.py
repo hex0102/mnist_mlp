@@ -6,9 +6,9 @@ class MLP(nn.Module):
         super(MLP,self).__init__()
         self.hidden1 = nn.Linear(784,1000)
         #self.formatting = Formatting()
-        self.activation = nn.ReLU()
-        self.hidden2 = nn.Linear(1000, 1000)
-        self.activation2 = nn.ReLU()
+        self.activation = nn.Sigmoid()
+        self.hidden2 = nn.Linear(1000, 10)
+        self.activation2 = nn.Sigmoid()
         #self.activation = nn.Sigmoid()
         self.out = nn.Linear(1000,10)
 
@@ -18,6 +18,6 @@ class MLP(nn.Module):
         # x = self.formatting(x)
         x = self.activation(x)
         x = self.hidden2(x)
-        x = self.activation2(x)
-        output = self.out(x)
+        output = self.activation2(x)
+        #output = self.out(x)
         return output

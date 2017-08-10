@@ -31,7 +31,8 @@ def apply_bitflip(x,p,IL,FL,flip_length):  #IL here means integer part not inclu
     temp = x.numpy()
     temp = temp*2. ** FL
     temp = temp.astype(int)
-    changes = np.zeros([temp.shape[0],temp.shape[1]])
+    #changes = np.zeros([temp.shape[0],temp.shape[1]])
+    changes = np.zeros(temp.shape)
     flip_length = flip_length - 1 #  [1 4 14]  flip_length
     if flip_length != (IL+FL):
         for i in range(flip_length):
@@ -44,19 +45,22 @@ def apply_bitflip(x,p,IL,FL,flip_length):  #IL here means integer part not inclu
             changes = changes + mask
     else: #including the sign bit
         for i in range(flip_length-1):
-            value_mask=np.ones([temp.shape[0],temp.shape[1]]) * (2**(i-FL))
+            #value_mask=np.ones([temp.shape[0],temp.shape[1]]) * (2**(i-FL))
+            value_mask = np.ones(temp.shape) * (2 ** (i - FL))
             zero_mask = np.bitwise_and(temp, 2**i)  #this funcs considers signed representation, so no worry
             zero_mask[zero_mask > 0] = -1  # 1 -> 0  reduces the value
             zero_mask[zero_mask == 0] = 1  # 0 -> 1  increases the value
-            flip_mask = np.random.binomial(1, p, [temp.shape[0],temp.shape[1]])
+            #flip_mask = np.random.binomial(1, p, [temp.shape[0],temp.shape[1]])
+            flip_mask = np.random.binomial(1, p, temp.shape)
             mask = flip_mask*zero_mask*value_mask
             changes = changes + mask
         #for the sign bit | reducing and increasing is much different
-        value_mask = np.ones([temp.shape[0], temp.shape[1]]) * (2 ** IL)
+        #value_mask = np.ones([temp.shape[0], temp.shape[1]]) * (2 ** IL)
+        value_mask = np.ones(temp.shape) * (2 ** IL)
         zero_mask = np.bitwise_and(temp, 2 **flip_length)
         zero_mask[zero_mask > 0] = 1
         zero_mask[zero_mask == 0] = -1
-        flip_mask = np.random.binomial(1, p, [temp.shape[0], temp.shape[1]])
+        flip_mask = np.random.binomial(1, p, temp.shape)
         mask = flip_mask * zero_mask * value_mask
         changes = changes + mask
     changes = torch.from_numpy(changes)
