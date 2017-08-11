@@ -17,6 +17,8 @@ torch.cuda.set_device(0)
 
 torch.manual_seed(2)
 
+N_in = 784
+N_out = 10
 EPOCH = 2
 BATCH_SIZE = 128
 LR = 1#0.1
@@ -28,6 +30,7 @@ collect_grads = 1
 
 
 N_layer = 2
+N_hidden = 1000
 SI = 1  # reminder for sign bit
 IL = 5  # IL = torch.IntTensor([4])   Not including the signed bit
 FL = 14  # FL = torch.IntTensor([12])
@@ -42,6 +45,8 @@ flip_len = IL + FL + SI  # flip all bits
 
 input_grads = []  # gradients are inside
 y_out = []
+y_in = []
+
 
 train_data = torchvision.datasets.MNIST(
     root='./mnist/',
@@ -113,6 +118,7 @@ def get_ingrads(self, grad_in, grad_out):
 
 def get_y(self, input, output):
     y_out.append(input)
+    y_in.append(output)
 
 
 
@@ -133,6 +139,8 @@ def mse_loss(x, y, size_average=False, per_element=False):
 mlp = MLP().cuda()
 optimizer = torch.optim.SGD(mlp.parameters(), lr=LR)  # , momentum=0.9)
 loss_func = nn.CrossEntropyLoss().cuda()
+
+params = mlp.state_dict()
 
 # add backward hooker on each layer, to regulate the gradient to fixed point representation
 if (collect_grads):
@@ -223,13 +231,13 @@ for epoch in range(EPOCH):
 
 
         insignificant=[]
-        weights = torch.FloatTensor(N_layer,BATCH_SIZE)
+        weights = torch.cuda.FloatTensor(N_layer,BATCH_SIZE)
         for n in range(N_layer):
             insignificant.append(torch.lt(delta_w[n], d_min).type(torch.cuda.FloatTensor))
             weights[n] = torch.sum(torch.sum(insignificant[n],1),1)
         weights = torch.sum(weights,0)
             #t1[n]=torch.mul(t1[n],insignificant[n].type(torch.cuda.FloatTensor))
-
+        #print(weights.size()) 128
         #dydw[m][n]-- b_s*higher*lower
         #update variables after having marked
         t2 = torch.zeros(10,BATCH_SIZE).cuda()
@@ -239,9 +247,104 @@ for epoch in range(EPOCH):
 
 
         t2.transpose_(0,1)
-        t3 = torch.sum(torch.mul(t2,t2),1)
+        t3 = torch.sum(torch.mul(t2,t2),1)  # BATCH_SIZE
 
-        for n in range(N_layer):
+        t2.transpose_(0, 1) #
+
+        # print(t2.size()) torch.Size([10, 128])
+        # print(insignificant[0].size()) torch.Size([128, 1000, 784])
+
+        #for calculation, we change dydw structure
+        '''
+        dydw_shape = []
+        for n in range(len(dydw[0])):
+            dydw_tensor = dydw[0][n]
+            for m in range(1, 10):
+                dydw_tensor = torch.cat((dydw_tensor,dydw[m][n]),1)
+            dydw_shape.append(dydw_tensor)
+        '''
+
+        #print(insignificant[n].size())  torch.Size([128, upper, lower])
+        #print(t1[0].size())
+        # t2 [BATCH_SIZE*N_output]   [Batch_size*upper*lower]
+        #dydw[m][n]           batch_size*upper*lower
+        #print(t2[m].size())  torch.Size([128])
+
+        b  = []
+        t4 = []
+        for k in range(10):
+            temp = []
+            for n in range(N_layer):
+                t4 = dydw[0][n].clone().zero_().cuda()
+                #temp.append(torch.div(dydw[m][n], t1[n]))
+                for m in range(10):
+                    t4.add_(t2[m].unsqueeze(1).unsqueeze(1)*insignificant[n]*torch.sign(dydw[m][n])*\
+                    ((k==m)*t1[n] - dydw[k][n]*dydw[m][n])/torch.pow(t1[n],1.5))
+                temp.append(torch.div(dydw[m][n], t1[n])+ weights.unsqueeze(1).unsqueeze(1)*t4/(t3.unsqueeze(1).unsqueeze(1)))
+            b.append(temp)
+
+        del t1
+        del t2
+        del t3
+
+        #params = mlp.state_dict()
+        #Forward pass
+
+        params = mlp.state_dict()
+        param_list = list(params.values())
+
+        weights = []
+        bias = []
+        for i in range(N_layer):
+            weights.append(param_list[2*i])
+            bias.append(param_list[2*i+1])
+
+
+
+        ry = []
+        ry.append(torch.cuda.FloatTensor(N_out,BATCH_SIZE,N_in).zero_())
+        ry.append(torch.cuda.FloatTensor(N_out,BATCH_SIZE,N_hidden).zero_())
+        ry.append(torch.cuda.FloatTensor(N_out,BATCH_SIZE,1).zero_())
+        rs = []
+
+
+        for k in range(N_out):
+            for u in range(1,N_layer):
+                rs_tmp = torch.mm(ry[u - 1][k], torch.transpose(weights[u-1], 0, 1))+ \
+                torch.squeeze(torch.bmm(b[k][u-1],y_out[2*u-2][0].data.unsqueeze(2)))
+                rs.append(rs_tmp)
+                print(rs_tmp.size())
+                print(y_out[2*u][0].data.size())
+                ry[u][k] = rs_tmp*((1-y_out[2*u][0].data)*y_out[2*u][0].data)  #need review
+                #BATCH_SIZE*HIDDEN*
+            print(ry[u][k].size())
+            print(weights[u][k].unsqueeze(1).size())
+            print(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])).size())
+
+            print(torch.mm(ry[u][k],weights[u][k].unsqueeze(1)).size())
+            print(torch.squeeze(torch.bmm(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])), y_out[2*u][0].data.unsqueeze(2))).size())
+            rs_tmp = torch.mm(ry[u][k],weights[u][k].unsqueeze(1))\
+                     +torch.squeeze(torch.bmm(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])), y_out[2*u][0].data.unsqueeze(2)),2) #should be caraful
+            print(rs_tmp.size())
+            rs.append(rs_tmp)
+            ry[u+1][k] = rs_tmp * (1- torch.index_select(y_in[2*u+1].data,1 ,torch.cuda.LongTensor([k])))*torch.index_select(y_in[2*u+1].data,1 ,torch.cuda.LongTensor([k]))
+
+
+        print(len(rs))
+        print(rs[0].size())
+        print(rs[1].size())
+        rdks = []
+        for k in range(N_out):
+            rdks.append(rs[2*k+1]*y_in[3])
+
+
+
+
+
+
+
+
+
             
 
         loss = loss_func(output, b_y)
