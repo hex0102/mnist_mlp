@@ -30,7 +30,7 @@ collect_grads = 1
 
 
 N_layer = 2
-N_hidden = 1000
+N_hidden = 500
 SI = 1  # reminder for sign bit
 IL = 5  # IL = torch.IntTensor([4])   Not including the signed bit
 FL = 14  # FL = torch.IntTensor([12])
@@ -44,6 +44,7 @@ p_flip = 0.0001
 flip_len = IL + FL + SI  # flip all bits
 
 input_grads = []  # gradients are inside
+output_grads = []
 y_out = []
 y_in = []
 
@@ -115,6 +116,7 @@ def fixed_point_back_hook(self, grad_in, grad_out):
 
 def get_ingrads(self, grad_in, grad_out):
     input_grads.append(grad_in[0].data)
+    #output_grads.append(grad_out)
 
 def get_y(self, input, output):
     y_out.append(input)
@@ -181,16 +183,23 @@ for epoch in range(EPOCH):
 
         output = mlp(b_x)
         dydw = []
+
+        ks = []
+        #ky= []
         for i in range(10):
             ind = torch.zeros(b_x.size()[0], 10).cuda()
             ind[:, i] = 1
+            input_grads = [] #reset input grads list
+            #output_grads = []
             output.backward(ind, retain_variables=True)
+            ks.append(input_grads)
+            #ky.append(output_grads)
             dyidw=[]
             for j in range(N_layer):
                 #print(j)
                 y_part = y_out[2*j][0].data
                 y_part = y_part.unsqueeze(1)
-                ys = input_grads[N_layer-2*j]
+                ys = input_grads[N_layer-2*j]    #need to considering
                 ys = ys.unsqueeze(N_layer)
                 yw = torch.bmm(ys,y_part)
                 #yw.add_(torch.mul((torch.abs(yw)<SMALL_D),SMALL_D))
@@ -309,10 +318,11 @@ for epoch in range(EPOCH):
 
 
         for k in range(N_out):
+            temp = []
             for u in range(1,N_layer):
                 rs_tmp = torch.mm(ry[u - 1][k], torch.transpose(weights[u-1], 0, 1))+ \
                 torch.squeeze(torch.bmm(b[k][u-1],y_out[2*u-2][0].data.unsqueeze(2)))
-                rs.append(rs_tmp)
+                temp.append(rs_tmp)
                 print(rs_tmp.size())
                 print(y_out[2*u][0].data.size())
                 ry[u][k] = rs_tmp*((1-y_out[2*u][0].data)*y_out[2*u][0].data)  #need review
@@ -326,19 +336,85 @@ for epoch in range(EPOCH):
             rs_tmp = torch.mm(ry[u][k],weights[u][k].unsqueeze(1))\
                      +torch.squeeze(torch.bmm(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])), y_out[2*u][0].data.unsqueeze(2)),2) #should be caraful
             print(rs_tmp.size())
-            rs.append(rs_tmp)
+            temp.append(rs_tmp)
+            rs.append(temp)
             ry[u+1][k] = rs_tmp * (1- torch.index_select(y_in[2*u+1].data,1 ,torch.cuda.LongTensor([k])))*torch.index_select(y_in[2*u+1].data,1 ,torch.cuda.LongTensor([k]))
 
 
         print(len(rs))
-        print(rs[0].size())
-        print(rs[1].size())
+
+
         rdks = []
+        rdky_top = []
+        rdky_low = []
+        rdw = []
+
+
         for k in range(N_out):
-            rdks.append(rs[2*k+1]*y_in[3])
+            rdks_k = []
+            temp = torch.index_select(y_in[3].data,1,torch.cuda.LongTensor([k]))
+
+            #print((rs[k][-1]).size())
+            #print(((1-2*temp)*temp*(1-temp)).size())
+            rdks_tmp=(rs[k][-1]*(1-2*temp)*temp*(1-temp))  #[128*1] rs[2*k+1]
+            print(weights[-1][k].size()) #500  checked
+            print(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])).size()) #128*1*500
+            print(ks[k][0].size()) #128*10
+            print(torch.unsqueeze(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])),1).size())
+            #rdks 128*1*500 * 500        +  128*1*500 * 128*1
+            temp=rdks_tmp*weights[-1][k]+ \
+                 torch.squeeze(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])),1)*torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k]))
+            print((rdks_tmp*weights[-1][k]).size())
+            print(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])).size())
+            print(torch.unsqueeze(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])),1).size())
+            rdky_top.append(temp) #rdky has ten 3d tensors with (128*1*500)
+            #(batch_size * hidden) * (batch_size*1)  + (batch_size*hidden)*(batch_size*1)
+            print(y_out[-2][0].data.size())
+            print(ry[-2][k].size())
+            print(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])).size())
+            temp = y_out[-2][0].data*rdks_tmp + ry[-2][k]*torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k]))
+            rdw.append(temp)
+
+            #(batch_size * (1) * hidden)*batch_size*hidden +
+
+            temp_y = y_in[1].data
+            #print(((1 - 2 * temp_y) * temp_y * (1 - temp_y)).size())
 
 
+            temp = rdky_top[k]*(1-y_out[-2][0].data)*y_out[-2][0].data +\
+                   rs[k][-2]*(1-2*temp_y)*temp_y*(1-temp_y)*ks[k][1][0]
+            #print((rdks[k] * weights[u][k]).size())
 
+
+            rdks_k.append(temp)
+            #rdks[k] is 128*500  W is
+            #
+            for u in range(N_layer-2,-1,-1):
+                print(rdks_k[N_layer-2-u].size())
+                print(weights[u].size())
+                print((ks[k][N_layer-2-u+1].size())) #torch.Size([128, 500])
+                print(b[k][u].size()) #torch.Size([128, 500, 784])
+                #[batch*hidden]
+                rdky_temp = torch.mm(rdks_k[N_layer-2-u], weights[u]) + \
+                       torch.squeeze(torch.bmm(torch.unsqueeze(ks[k][N_layer-2-u+1],1),b[k][u]),1)
+                     #orch.squeeze(torch.index_select(b[k][-1], 1, torch.cuda.LongTensor([k])), 1) * torch.index_select(ks[k][0], 1, torch.cuda.LongTensor([k]))
+
+                #print(rdky_temp.size()) torch.Size([128, 784])
+                print(rdks_k[N_layer - 2 - u].size())
+                print(y_out[u][0].data.size())
+                #print(torch.bmm(torch.unsqueeze(rdks_k[N_layer-2-u],2),torch.unsqueeze(y_out[u][0].data,1).size())
+                rdw_temp =  torch.bmm(torch.unsqueeze(rdks_k[N_layer-2-u],2),torch.unsqueeze(y_out[u][0].data,1))\
+                            + torch.bmm(torch.unsqueeze(ks[k][N_layer-2-u+1],2), torch.unsqueeze(ry[u][k],1))
+                print(rdky_temp.size())
+
+                y_temp = y_out[u][0].data
+                print(ks[k][2*N_layer-2*u-1].size())
+                if(u!=0):
+                    rdks_k.append((1-y_temp)*y_temp*rdky_temp + rs[k][u-1]*(1-2*y_temp)*y_temp*(1-y_temp)*ks[k][2*N_layer-2*u+1][0])
+            rdks.append(rdks_k)
+
+            rdw = torch.cuda.FloatTensor()
+            for k in range
 
 
 
