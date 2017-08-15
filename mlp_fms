@@ -19,14 +19,15 @@ torch.manual_seed(2)
 
 N_in = 784
 N_out = 10
-EPOCH = 2
+EPOCH = 1
 BATCH_SIZE = 128
-LR = 1#0.1
+LR = 0.01#0.1
 DOWNLOAD_MNIST = True
 save_model = 0
 load_model = 0
 en_plot = 0
 collect_grads = 1
+lamb  = 0.25
 
 
 N_layer = 2
@@ -44,7 +45,7 @@ p_flip = 0.0001
 flip_len = IL + FL + SI  # flip all bits
 
 input_grads = []  # gradients are inside
-output_grads = []
+weight_grads = []
 y_out = []
 y_in = []
 
@@ -116,6 +117,8 @@ def fixed_point_back_hook(self, grad_in, grad_out):
 
 def get_ingrads(self, grad_in, grad_out):
     input_grads.append(grad_in[0].data)
+    if grad_in.__len__() > 1:
+        weight_grads.append(grad_in[1].data)
     #output_grads.append(grad_out)
 
 def get_y(self, input, output):
@@ -126,10 +129,36 @@ def get_y(self, input, output):
 
 
 
-def mse_loss(x, y, size_average=False, per_element=False):
+def mse_loss(x, y, size_average=False, per_element=True):
+    #print(type(y))
+    #print(y.data.size())
+    #print(y.data.type())
+    '''
+    y.data = y.data.unsqueeze(1)
+    #print(y.data.size())
+    y_onehot = torch.cuda.FloatTensor(BATCH_SIZE, 10)
+    y_onehot.zero_()
+    y_onehot.scatter_(1, y.data, 1)
+    y.data = y_onehot
+    #print(x.size())
+    #print(y.size())
     loss_per_element = (x - y) ** 2
     if per_element:
-        return loss_per_element.sum(1)
+        return loss_per_element.mean(1)
+    if size_average:
+        return loss_per_element.mean()
+    return loss_per_element.sum()
+    '''
+
+    y.data = y.data.unsqueeze(1)
+    y_onehot = torch.cuda.FloatTensor(BATCH_SIZE, 10)
+    y_onehot.zero_()
+    y_onehot.scatter_(1, y.data, 1)
+    label = y_onehot
+    label = Variable(label)
+    loss_per_element = (x- label) ** 2
+    if per_element:
+        return loss_per_element.mean(1,keepdim=True)
     if size_average:
         return loss_per_element.mean()
     return loss_per_element.sum()
@@ -180,10 +209,15 @@ for epoch in range(EPOCH):
     for step, (x, y) in enumerate(train_loader):
         b_x = Variable(x.cuda(), requires_grad=True)
         b_y = Variable(y.cuda())
-
+        BATCH_SIZE = b_x.size()[0]
+        y_out = []
+        y_in = []
         output = mlp(b_x)
-        dydw = []
 
+
+        #first backward to get dydw and ks
+        dydw = []
+        #print(len(y_out)
         ks = []
         #ky= []
         for i in range(10):
@@ -201,7 +235,10 @@ for epoch in range(EPOCH):
                 y_part = y_part.unsqueeze(1)
                 ys = input_grads[N_layer-2*j]    #need to considering
                 ys = ys.unsqueeze(N_layer)
+                #print(ys.size())
+                #print(y_part.size())
                 yw = torch.bmm(ys,y_part)
+
                 #yw.add_(torch.mul((torch.abs(yw)<SMALL_D),SMALL_D))
                 dyidw.append(yw+torch.mul((torch.abs(yw)<SMALL_D).type(torch.cuda.FloatTensor),SMALL_D))
                 mlp.zero_grad()
@@ -225,18 +262,24 @@ for epoch in range(EPOCH):
         t2.transpose_(0,1)
 
         t3 = torch.sum(torch.mul(t2,t2),1)
-
+        #print(t3.size()) #[128]
+        #print(EPSILON)
         delta_w = []
         delta_min = torch.cuda.FloatTensor(N_layer,BATCH_SIZE);
-        eps_t3 = torch.sqrt(torch.mul(torch.reciprocal(t3),EPSILON)).unsqueeze(1).unsqueeze(1)
+        #eps_t3 = torch.sqrt(torch.mul(torch.reciprocal(t3),EPSILON)).unsqueeze(1).unsqueeze(1)
+        eps_t3 = torch.sqrt(EPSILON/t3).unsqueeze(1).unsqueeze(1)
+        #print(eps_t3.size()) #[128,1,1]
         for n in range(N_layer):
             delta_w.append(torch.mul(torch.sqrt(torch.reciprocal(t1[n])),eps_t3))
+            #print(delta_w[n].size())
             delta_min[n]=torch.min(torch.min(delta_w[n],1)[0],1)[0]
             #delta_min.append(torch.min(torch.min(delta_w[n],1)[0],1)[0])
 
         d_min = (torch.min(delta_min,0)[0]).unsqueeze(1).unsqueeze(1)*K
+        #print(d_min.size())
         #d_min.transpose_(0,1)
         #for n in range(N_layer):
+
 
 
         insignificant=[]
@@ -245,8 +288,9 @@ for epoch in range(EPOCH):
             insignificant.append(torch.lt(delta_w[n], d_min).type(torch.cuda.FloatTensor))
             weights[n] = torch.sum(torch.sum(insignificant[n],1),1)
         weights = torch.sum(weights,0)
+        #print(weights)
             #t1[n]=torch.mul(t1[n],insignificant[n].type(torch.cuda.FloatTensor))
-        #print(weights.size()) 128
+        #print(weights) #128   checked
         #dydw[m][n]-- b_s*higher*lower
         #update variables after having marked
         t2 = torch.zeros(10,BATCH_SIZE).cuda()
@@ -257,7 +301,7 @@ for epoch in range(EPOCH):
 
         t2.transpose_(0,1)
         t3 = torch.sum(torch.mul(t2,t2),1)  # BATCH_SIZE
-
+        #print(t3)
         t2.transpose_(0, 1) #
 
         # print(t2.size()) torch.Size([10, 128])
@@ -281,17 +325,23 @@ for epoch in range(EPOCH):
 
         b  = []
         t4 = []
-        for k in range(10):
+        for k in range(N_out):
             temp = []
             for n in range(N_layer):
                 t4 = dydw[0][n].clone().zero_().cuda()
                 #temp.append(torch.div(dydw[m][n], t1[n]))
-                for m in range(10):
+                for m in range(N_out):
                     t4.add_(t2[m].unsqueeze(1).unsqueeze(1)*insignificant[n]*torch.sign(dydw[m][n])*\
                     ((k==m)*t1[n] - dydw[k][n]*dydw[m][n])/torch.pow(t1[n],1.5))
                 temp.append(torch.div(dydw[m][n], t1[n])+ weights.unsqueeze(1).unsqueeze(1)*t4/(t3.unsqueeze(1).unsqueeze(1)))
             b.append(temp)
 
+        #print(b)
+        #print(len(b))
+        #print(len(b[0]))
+        #print(len(b[0][0]))
+        #print(len(b[0][0][0]))
+        #print((b[0][1][0][0]))
         del t1
         del t2
         del t3
@@ -316,64 +366,88 @@ for epoch in range(EPOCH):
         ry.append(torch.cuda.FloatTensor(N_out,BATCH_SIZE,1).zero_())
         rs = []
 
-
+        #second forward pass
         for k in range(N_out):
             temp = []
             for u in range(1,N_layer):
-                rs_tmp = torch.mm(ry[u - 1][k], torch.transpose(weights[u-1], 0, 1))+ \
-                torch.squeeze(torch.bmm(b[k][u-1],y_out[2*u-2][0].data.unsqueeze(2)))
+                #print(ry[u - 1][k].size())
+                #print(torch.unsqueeze(torch.transpose(weights[u - 1], 0, 1),0).size())
+                #print(torch.transpose(insignificant[u - 1],1,2).size())
+
+
+                #print(b[k][u-1].size()) #torch.Size([128, 500, 784])
+                #print((y_out[2*u-2][0].data.unsqueeze(2)).size())
+                #   bmm(128*1*784, 128*784*500 * 1*784*500 ).squeeze  +
+                rs_tmp = torch.squeeze(torch.bmm(torch.unsqueeze(ry[u - 1][k],1), torch.transpose(insignificant[u - 1],1,2)*torch.unsqueeze(torch.transpose(weights[u - 1], 0, 1),0)),1)+ \
+                torch.squeeze(torch.bmm(b[k][u-1]*insignificant[u - 1],y_out[2*u-2][0].data.unsqueeze(2)))
+                #print(rs_tmp.size())
+                #rs_tmp = torch.mm(ry[u - 1][k], torch.transpose(weights[u-1], 0, 1))+ \
+                #torch.squeeze(torch.bmm(b[k][u-1],y_out[2*u-2][0].data.unsqueeze(2)))
                 temp.append(rs_tmp)
-                print(rs_tmp.size())
-                print(y_out[2*u][0].data.size())
+
+                #print(y_out[2*u][0].data.size())
                 ry[u][k] = rs_tmp*((1-y_out[2*u][0].data)*y_out[2*u][0].data)  #need review
                 #BATCH_SIZE*HIDDEN*
-            print(ry[u][k].size())
-            print(weights[u][k].unsqueeze(1).size())
-            print(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])).size())
+            #print(ry[u][k].size())
+            #print(weights[u][k].unsqueeze(1).size())
+            #print(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])).size())
 
-            print(torch.mm(ry[u][k],weights[u][k].unsqueeze(1)).size())
-            print(torch.squeeze(torch.bmm(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])), y_out[2*u][0].data.unsqueeze(2))).size())
-            rs_tmp = torch.mm(ry[u][k],weights[u][k].unsqueeze(1))\
-                     +torch.squeeze(torch.bmm(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])), y_out[2*u][0].data.unsqueeze(2)),2) #should be caraful
-            print(rs_tmp.size())
+            #print(torch.mm(ry[u][k],weights[u][k].unsqueeze(1)).size())
+            #print(torch.squeeze(torch.bmm(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])), y_out[2*u][0].data.unsqueeze(2))).size())
+            #rs_tmp = torch.mm(ry[u][k],weights[u][k].unsqueeze(1))\
+                     #+torch.squeeze(torch.bmm(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])), y_out[2*u][0].data.unsqueeze(2)),2) #should be caraful
+            #print(rs_tmp.size())
+            #print(insignificant[u].size())#torch.Size([128, 10, 500])
+            #print(torch.bmm(ry[u][k].unsqueeze(1), torch.transpose(((weights[u][k].unsqueeze(1)).unsqueeze(0))*torch.index_select(insignificant[u],1,torch.cuda.LongTensor([k])),1,2)).size())
+            #print(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k])).size())
+            rs_tmp = torch.squeeze(torch.bmm(ry[u][k].unsqueeze(1), ((weights[u][k].unsqueeze(1)).unsqueeze(0))*torch.transpose(torch.index_select(insignificant[u],1,torch.cuda.LongTensor([k])),1,2)),2)\
+                     + torch.squeeze(torch.bmm(torch.index_select(b[k][u],1,torch.cuda.LongTensor([k]))*torch.index_select(insignificant[u],1,torch.cuda.LongTensor([k])), y_out[2*u][0].data.unsqueeze(2)),2) #should be caraful
+
+
+            #rint(rs_tmp.size())
             temp.append(rs_tmp)
             rs.append(temp)
             ry[u+1][k] = rs_tmp * (1- torch.index_select(y_in[2*u+1].data,1 ,torch.cuda.LongTensor([k])))*torch.index_select(y_in[2*u+1].data,1 ,torch.cuda.LongTensor([k]))
 
 
-        print(len(rs))
+        #print(len(rs))
 
 
         rdks = []
         rdky_top = []
-        rdky_low = []
         rdw = []
 
 
         for k in range(N_out):
             rdks_k = []
+            rdw_k = []
             temp = torch.index_select(y_in[3].data,1,torch.cuda.LongTensor([k]))
 
             #print((rs[k][-1]).size())
             #print(((1-2*temp)*temp*(1-temp)).size())
             rdks_tmp=(rs[k][-1]*(1-2*temp)*temp*(1-temp))  #[128*1] rs[2*k+1]
-            print(weights[-1][k].size()) #500  checked
-            print(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])).size()) #128*1*500
-            print(ks[k][0].size()) #128*10
-            print(torch.unsqueeze(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])),1).size())
+            #print(rdks_tmp.size()) #torch.Size([128, 1])
+            #print(weights[-1][k].size()) #500  checked
+            #print(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])).size()) #128*1*500
+            #print(ks[k][0].size()) #128*10
+            #print(torch.unsqueeze(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])),1).size())
             #rdks 128*1*500 * 500        +  128*1*500 * 128*1
-            temp=rdks_tmp*weights[-1][k]+ \
-                 torch.squeeze(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])),1)*torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k]))
-            print((rdks_tmp*weights[-1][k]).size())
-            print(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])).size())
-            print(torch.unsqueeze(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])),1).size())
+            #temp=rdks_tmp*weights[-1][k]*torch.index_select(insignificant[-1],1,torch.cuda.LongTensor([k]))+ \
+                 #torch.squeeze(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])),1)*torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k]))
+            temp=torch.squeeze(torch.bmm(rdks_tmp.unsqueeze(2), ((weights[-1][k].unsqueeze(0)).unsqueeze(0))*torch.index_select(insignificant[-1],1,torch.cuda.LongTensor([k]))),1)+ \
+                 torch.squeeze(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k]))*torch.index_select(insignificant[-1],1,torch.cuda.LongTensor([k])),1)*torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k]))
+            #print((rdks_tmp*weights[-1][k]).size())
+            #print(torch.index_select(b[k][-1],1,torch.cuda.LongTensor([k])).size())
+            #print(torch.unsqueeze(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])),1).size())
             rdky_top.append(temp) #rdky has ten 3d tensors with (128*1*500)
             #(batch_size * hidden) * (batch_size*1)  + (batch_size*hidden)*(batch_size*1)
-            print(y_out[-2][0].data.size())
-            print(ry[-2][k].size())
-            print(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])).size())
-            temp = y_out[-2][0].data*rdks_tmp + ry[-2][k]*torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k]))
-            rdw.append(temp)
+            #print(rdks_tmp.size())
+            #print(y_out[-2][0].data.size())
+            #print(ry[-2][k].size())
+            #print(torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])).size())
+            temp = (y_out[-2][0].data*rdks_tmp + ry[-2][k]*torch.index_select(ks[k][0],1,torch.cuda.LongTensor([k])))*(torch.index_select(insignificant[-1],1,torch.cuda.LongTensor([k])).squeeze(1))
+            #rint(temp.size())
+            rdw_k.append(temp)
 
             #(batch_size * (1) * hidden)*batch_size*hidden +
 
@@ -390,40 +464,114 @@ for epoch in range(EPOCH):
             #rdks[k] is 128*500  W is
             #
             for u in range(N_layer-2,-1,-1):
-                print(rdks_k[N_layer-2-u].size())
-                print(weights[u].size())
-                print((ks[k][N_layer-2-u+1].size())) #torch.Size([128, 500])
-                print(b[k][u].size()) #torch.Size([128, 500, 784])
+                #print(rdks_k[N_layer-2-u].size())
+                #print(weights[u].size())
+                #print((ks[k][N_layer-2-u+1].size())) #torch.Size([128, 500])
+                #print(b[k][u].size()) #torch.Size([128, 500, 784])
                 #[batch*hidden]
-                rdky_temp = torch.mm(rdks_k[N_layer-2-u], weights[u]) + \
-                       torch.squeeze(torch.bmm(torch.unsqueeze(ks[k][N_layer-2-u+1],1),b[k][u]),1)
+                #rdky_temp = torch.mm(rdks_k[N_layer-2-u], weights[u]) + \
+                       #torch.squeeze(torch.bmm(torch.unsqueeze(ks[k][N_layer-2-u+1],1),b[k][u]),1)
                      #orch.squeeze(torch.index_select(b[k][-1], 1, torch.cuda.LongTensor([k])), 1) * torch.index_select(ks[k][0], 1, torch.cuda.LongTensor([k]))
-
+                #rdky_temp = torch.mm(rdks_k[N_layer-2-u], weights[u]) + \
+                       #torch.squeeze(torch.bmm(torch.unsqueeze(ks[k][N_layer-2-u+1],1),b[k][u]),1)
+                #print(b[k][u].size())
+                #print(insignificant[u].size())
+                rdky_temp = torch.squeeze(torch.bmm(torch.unsqueeze(rdks_k[N_layer-2-u],1), insignificant[u]*torch.unsqueeze(weights[u],0)), 1) + \
+                       torch.squeeze(torch.bmm(torch.unsqueeze(ks[k][N_layer-2-u+1],1),b[k][u]*insignificant[u]),1)
                 #print(rdky_temp.size()) torch.Size([128, 784])
-                print(rdks_k[N_layer - 2 - u].size())
-                print(y_out[u][0].data.size())
-                #print(torch.bmm(torch.unsqueeze(rdks_k[N_layer-2-u],2),torch.unsqueeze(y_out[u][0].data,1).size())
-                rdw_temp =  torch.bmm(torch.unsqueeze(rdks_k[N_layer-2-u],2),torch.unsqueeze(y_out[u][0].data,1))\
-                            + torch.bmm(torch.unsqueeze(ks[k][N_layer-2-u+1],2), torch.unsqueeze(ry[u][k],1))
-                print(rdky_temp.size())
+                #print(rdks_k[N_layer - 2 - u].size())
+                #print(y_out[u][0].data.size())
+                #print(torch.bmm(torch.unsqueeze(rdks_k[N_layer-2-u],2),torch.unsqueeze(y_out[u][0].data,1)).size())
+                rdw_temp =  (torch.bmm(torch.unsqueeze(rdks_k[N_layer-2-u],2),torch.unsqueeze(y_out[u][0].data,1))\
+                            + torch.bmm(torch.unsqueeze(ks[k][N_layer-2-u+1],2), torch.unsqueeze(ry[u][k],1)))*(insignificant[u])
+                rdw_k.append(rdw_temp)
 
                 y_temp = y_out[u][0].data
-                print(ks[k][2*N_layer-2*u-1].size())
+                #print(ks[k][2*N_layer-2*u-1].size())
                 if(u!=0):
                     rdks_k.append((1-y_temp)*y_temp*rdky_temp + rs[k][u-1]*(1-2*y_temp)*y_temp*(1-y_temp)*ks[k][2*N_layer-2*u+1][0])
             rdks.append(rdks_k)
+            rdw.append(rdw_k)
 
-            rdw = torch.cuda.FloatTensor()
-            for k in range
+        rdw_sum = []
+        for n in range(N_layer):
+            rdw_sum.append(rdw[0][n].clone().zero_())
+        rdw_sum[0] = torch.unsqueeze(rdw[0][0],1)
+
+        #print(rdw_sum[0].size())
+
+        for k in range(1, N_out):
+            #print(torch.unsqueeze(rdw[k][0],1).size()) torch.Size([128, 1, 500])
+            rdw_sum[0] = torch.cat((rdw_sum[0],torch.unsqueeze(rdw[k][0],1)),1)
+
+        for n in range(1, N_layer):
+            for k in range(N_out):
+                rdw_sum[n].add_(rdw[k][n])
 
 
+        #normalize B's gradient to length of E's gradient
+        #lyw = torch.sum(torch.sum(rdw_sum[n] * rdw_sum[n], 1), 1)
+        lrdw = torch.cuda.FloatTensor(1).zero_()
+        lyw = torch.cuda.FloatTensor(1).zero_()
+        mlp.zero_grad()
+        input_grads = []
+        weight_grads = []
 
 
+        ind = torch.zeros(b_x.size()[0],1).cuda()
+        ind[:,:] = 1
+        loss = mse_loss(output,b_y)
+        #print(loss.data.size())
+        #print(ind.size())
+        optimizer.zero_grad()
+        loss.backward(ind,retain_variables=True)
+        #print(output.size())
+        #print(b_y.size())
 
 
-            
+        rdw_updates = []
+        for n in range(N_layer):
+            #print(rdw_sum[n].size())
+            #print(insignificant[N_layer-1-n].size())
+            rdw_all_sample = torch.sum(rdw_sum[n]*insignificant[N_layer-1-n],0)
+            #print(rdw_all_sample.size())
+            rdw_updates.append(rdw_all_sample)
+            #print(rdw_all_sample.size())
+            lrdw += torch.sum(rdw_all_sample*rdw_all_sample)
 
-        loss = loss_func(output, b_y)
+        for n in range(N_layer):
+            #print(weight_grads[n].size())
+            lyw += torch.sum(weight_grads[n]*weight_grads[n]*insignificant[N_layer-1-n])
+
+        #print(lyw)
+        #print(lrdw)
+
+        scale = lyw/lrdw
+
+
+        #print(scale)
+
+
+        optimizer.step()
+        mlp.parameters()
+
+
+        params = mlp.state_dict()
+        param_list = list(params.values())
+
+        weights = []
+        bias = []
+
+        for i in range(N_layer):
+            #print(rdw_updates[N_layer-1-i].size())
+            #print(insignificant[i].size())
+            param_list[2 * i].add_(-1*lamb*scale*rdw_updates[N_layer-1-i])
+            #print(param_list[2*i].size())
+            #param_list[2*i].add_(rdw)
+
+
+        #print(loss)
+        #loss = loss_func(output, b_y)
 
         '''
         for i in range(BATCH_SIZE):
@@ -432,9 +580,8 @@ for epoch in range(EPOCH):
             mlp.zero_grad()
         '''
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+
+
 
         if nonideal_train:
             apply_format_inplace('FXP', linear[0].data, IL, FL)  # weight
@@ -449,10 +596,10 @@ for epoch in range(EPOCH):
             apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
             apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
 
-        if step % 50 == 0:
-            print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0])
+        if step % 20 == 0:
+            print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0][0])
 
-        avg_loss = np.append(avg_loss, loss.data[0])
+        avg_loss = np.append(avg_loss, loss.data[0][0])
 
         '''
         if step % 120 == 0:
@@ -464,8 +611,9 @@ for epoch in range(EPOCH):
             #plt.show(block=False)
             i = i + 1
 
-        train_loss_x = train_loss_x.astype(int)
-        '''
+        train_loss_x = train_loss_x.astype(int)120
+   4
+        7fgv'''
 
         '''
         if step % 50 == 0:

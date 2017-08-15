@@ -14,9 +14,9 @@ import numpy as np
 torch.manual_seed(2)
 
 
-EPOCH = 2
-BATCH_SIZE = 244
-LR = 0.1
+EPOCH = 20
+BATCH_SIZE = 128
+LR = 0.01
 DOWNLOAD_MNIST = True
 save_model = 0
 load_model = 0
@@ -29,7 +29,7 @@ nonideal_train = 1 #fixed point train
 nonideal_inference = 0 #fixed point inference
 
 #enabling ntv which increases bit flip probability
-en_ntv_inference = 1
+en_ntv_inference = 0
 en_ntv_train = 0
 p_flip = 0.0001
 flip_len = IL + FL + SI # flip all bits
@@ -97,10 +97,21 @@ def fixed_point_back_hook(self, grad_in, grad_out):
         return grad_in
 
 
-def mse_loss(x, y, size_average=False, per_element=False):
-    loss_per_element = (x - y) ** 2
+
+def mse_loss(x, y, size_average=True, per_element=True):
+    #print(type(y))
+    #print(y.data.size())
+    #print(y.data.type())
+    #print(y.data.size())
+    y.data = y.data.unsqueeze(1)
+    y_onehot = torch.FloatTensor(BATCH_S, 10)
+    y_onehot.zero_()
+    y_onehot.scatter_(1, y.data, 1)
+    label = y_onehot
+    label = Variable(label)
+    loss_per_element = (x- label) ** 2
     if per_element:
-        return loss_per_element.sum(1)
+        return loss_per_element.mean(1,keepdim=True)
     if size_average:
         return loss_per_element.mean()
     return loss_per_element.sum()
@@ -148,14 +159,14 @@ for epoch in range(EPOCH):
         b_x = Variable(x,requires_grad = True)
         b_y = Variable(y)
 
+        BATCH_S = b_x.size()[0]
+        #print(BATCH_S)
         output = mlp(b_x)
 
-        for i in range(10):
-            ind = torch.zeros(b_x.size()[0], 10)
-            ind[:, i] = 1
-            output.backward(ind, retain_variables=True)
 
-        loss = loss_func(output, b_y)
+        #loss = loss_func(output, b_y)
+        loss = mse_loss(output,b_y)
+        #print(loss.size())
         mlp.zero_grad()
         '''
         for i in range(BATCH_SIZE):
@@ -164,8 +175,11 @@ for epoch in range(EPOCH):
             mlp.zero_grad()
         '''
 
+        ind = torch.zeros(b_x.size()[0],1)
+        ind[:,:] = 1
+
         optimizer.zero_grad()
-        loss.backward()
+        loss.backward(ind)
         optimizer.step()
 
         if nonideal_train:
@@ -182,9 +196,9 @@ for epoch in range(EPOCH):
             apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
 
         if step % 50 == 0:
-            print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0])
+            print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0][0])
 
-        avg_loss = np.append(avg_loss, loss.data[0])
+        avg_loss = np.append(avg_loss, loss.data[0][0])
 
 
         '''
