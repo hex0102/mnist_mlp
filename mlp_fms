@@ -1,5 +1,6 @@
 import torch
 import torchvision
+from torchvision import datasets, transforms
 import torch.nn as nn
 import torch.nn.init as init
 from torch.autograd import Variable
@@ -21,35 +22,44 @@ N_in = 784
 N_out = 10
 EPOCH = 1
 BATCH_SIZE = 128
-LR = 0.01#0.1
+LR = 0.1#0.1
 DOWNLOAD_MNIST = True
+en_plot = 0
+
+load_model_train = 1
 save_model = 0
 load_model = 0
-en_plot = 0
 collect_grads = 1
-lamb  = 0.25
-
-
+lamb  = 20
+#flat minimal parameters
+SMALL_D = 0.000001
+EPSILON = torch.cuda.FloatTensor([0.16])
+K = 100
+wrange = 0.4
 N_layer = 2
-N_hidden = 500
+N_hidden = 20
+
+
+
+
 SI = 1  # reminder for sign bit
-IL = 5  # IL = torch.IntTensor([4])   Not including the signed bit
-FL = 14  # FL = torch.IntTensor([12])
+IL = 3  # IL = torch.IntTensor([4])   Not including the signed bit
+FL = 3  # FL = torch.IntTensor([12])
 nonideal_train = 0  # fixed point train
 nonideal_inference = 0  # fixed point inference
 
 # enabling ntv which increases bit flip probability
 en_ntv_inference = 0
 en_ntv_train = 0
-p_flip = 0.0001
-flip_len = IL + FL + SI  # flip all bits
+p_flip = 0.001
+flip_len = IL + FL - 1 # flip all bits
 
 input_grads = []  # gradients are inside
 weight_grads = []
 y_out = []
 y_in = []
 
-
+'''
 train_data = torchvision.datasets.MNIST(
     root='./mnist/',
     train=True,
@@ -63,11 +73,27 @@ train_loader = Data.DataLoader(dataset=train_data, batch_size=BATCH_SIZE, shuffl
 
 test_x = Variable(torch.unsqueeze(test_data.test_data, dim=1), volatile=True).type(torch.FloatTensor)[:2000] / 255.
 test_y = test_data.test_labels[:2000]
+'''
+train_data = torchvision.datasets.MNIST(
+    root = './mnist/',
+    train=True,
+    transform=transforms.Compose([ transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]),
+    download=DOWNLOAD_MNIST,
+)
 
-#flat minimal parameters
-SMALL_D = 0.000001
-EPSILON = torch.cuda.FloatTensor([0.01])
-K = 100
+
+#test_data = torchvision.datasets.MNIST(root='./mnist/', train=False,transform=transforms.Compose([ transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]))
+
+train_loader = Data.DataLoader(dataset=train_data, batch_size=BATCH_SIZE, shuffle=True)
+
+test_loader = torch.utils.data.DataLoader(
+    datasets.MNIST('./mnist/', train=False, transform=transforms.Compose([
+                       transforms.ToTensor(),
+                       transforms.Normalize((0.1307,), (0.3081,))
+                   ])),
+    batch_size=BATCH_SIZE, shuffle=False)
+
+
 
 
 # defining hooks
@@ -126,7 +152,15 @@ def get_y(self, input, output):
     y_in.append(output)
 
 
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Linear') != -1:
+        xavier(m.weight.data)
 
+def xavier(initial_data):
+    initial_data.zero_()
+    temp = wrange*(torch.rand(initial_data.size()).cuda() - 0.5)
+    initial_data.add_(temp)
 
 
 def mse_loss(x, y, size_average=False, per_element=True):
@@ -165,9 +199,13 @@ def mse_loss(x, y, size_average=False, per_element=True):
 
 
 
+if load_model_train:
+    print('Loading model......')
+    mlp = torch.load('mlp_mnist_fms.pkl')
+else:
+    mlp = MLP().cuda()
+    mlp.apply(weights_init)
 
-
-mlp = MLP().cuda()
 optimizer = torch.optim.SGD(mlp.parameters(), lr=LR)  # , momentum=0.9)
 loss_func = nn.CrossEntropyLoss().cuda()
 
@@ -185,17 +223,18 @@ if (collect_grads):
     mlp.hidden2.register_forward_hook(get_y)
     mlp.activation2.register_forward_hook(get_y)
 
-# >>>>>>>>Dump neural network weight to list
-linear = list(mlp.hidden1.parameters())
-init.constant(linear[1].data, 0)
-linear2 = list(mlp.hidden2.parameters())
-init.constant(linear2[1].data, 0)
-out = list(mlp.out.parameters())
-init.constant(out[1].data, 0)
+# >>>>>>>>Dump neural network weight to list and do initialization
+if not load_model_train:
+    linear = list(mlp.hidden1.parameters())
+    init.constant(linear[1].data, 0)
+    linear2 = list(mlp.hidden2.parameters())
+    init.constant(linear2[1].data, 0)
+    out = list(mlp.out.parameters())
+    init.constant(out[1].data, 0)
 
-init.normal(linear[0].data, mean=0, std=0.01)
-init.normal(linear2[0].data, mean=0, std=0.01)
-init.normal(out[0].data, mean=0, std=0.01)
+    init.normal(linear[0].data, mean=0, std=0.01)
+    init.normal(linear2[0].data, mean=0, std=0.01)
+    init.normal(out[0].data, mean=0, std=0.01)
 
 train_loss_y = np.array([])
 train_loss_x = np.array([])
@@ -206,6 +245,7 @@ dydy=[]
 
 for epoch in range(EPOCH):
     avg_loss = np.array([])
+    total_b = torch.cuda.FloatTensor(1).zero_()
     for step, (x, y) in enumerate(train_loader):
         b_x = Variable(x.cuda(), requires_grad=True)
         b_y = Variable(y.cuda())
@@ -240,8 +280,19 @@ for epoch in range(EPOCH):
                 yw = torch.bmm(ys,y_part)
 
                 #yw.add_(torch.mul((torch.abs(yw)<SMALL_D),SMALL_D))
-                dyidw.append(yw+torch.mul((torch.abs(yw)<SMALL_D).type(torch.cuda.FloatTensor),SMALL_D))
-                mlp.zero_grad()
+                #dyidw.append(yw+torch.mul((torch.abs(yw)<SMALL_D).type(torch.cuda.FloatTensor),SMALL_D))
+                if j != N_layer - 1:
+                    small_index = torch.abs(yw) < SMALL_D
+                    yw[small_index] = torch.sign(yw[small_index]+0.0000000000001)* SMALL_D
+                else:
+                    #print(yw[:,i,:].size
+                    temp = yw[:, i, :]
+                    small_index = torch.abs(temp) < SMALL_D
+                    temp[small_index] = torch.sign(temp[small_index]+0.0000000000001) * SMALL_D
+                    #yw[:, i, :].add_(torch.sign(yw[:, i, :])*((torch.abs(yw[:, i, :]) < SMALL_D).type(torch.cuda.FloatTensor) * SMALL_D))
+                    yw[:, i, :] = temp
+                dyidw.append(yw)
+
             dydw.append(dyidw)
             mlp.zero_grad()
             #for j in range(2):
@@ -250,14 +301,18 @@ for epoch in range(EPOCH):
         for n in range(N_layer):
             t1.append(dydw[0][n].clone().zero_())
             for m in range(10):
-                t1[n].add_(torch.mul(dydw[m][n],dydw[m][n]))
-
+                #t1[n].add_(torch.mul(dydw[m][n],dydw[m][n]))
+                t1[n].add_((dydw[m][n] * dydw[m][n]))
+        #t1 [0][50]  #dydw[0][0][50][18]
         t2 = torch.zeros(10,BATCH_SIZE).cuda()
-
+        #checked
 
         for m in range(10):
             for n in range(N_layer):
-                t2[m] += torch.sum(torch.sum(torch.abs(torch.div(dydw[m][n],torch.sqrt(t1[n]))),1),1)
+                #print(t2[m].size())
+                #print(torch.sum(torch.sum(torch.abs(torch.div(dydw[m][n],torch.sqrt(t1[n]))),2),1).size())
+                #t2[m] += torch.sum(torch.sum(torch.abs(torch.div(dydw[m][n],torch.sqrt(t1[n]))),2),1)
+                t2[m].add_(torch.sum(torch.sum(torch.abs(torch.div(dydw[m][n],torch.sqrt(t1[n]))),2),1))
 
         t2.transpose_(0,1)
 
@@ -269,20 +324,26 @@ for epoch in range(EPOCH):
         #eps_t3 = torch.sqrt(torch.mul(torch.reciprocal(t3),EPSILON)).unsqueeze(1).unsqueeze(1)
         eps_t3 = torch.sqrt(EPSILON/t3).unsqueeze(1).unsqueeze(1)
         #print(eps_t3.size()) #[128,1,1]
+        avg_b = torch.cuda.FloatTensor(1).zero_()
         for n in range(N_layer):
-            delta_w.append(torch.mul(torch.sqrt(torch.reciprocal(t1[n])),eps_t3))
+            #delta_w.append(torch.mul(torch.sqrt(torch.reciprocal(t1[n])),eps_t3))
+            delta_w.append(torch.div(eps_t3,torch.sqrt(t1[n])))
             #print(delta_w[n].size())
-            delta_min[n]=torch.min(torch.min(delta_w[n],1)[0],1)[0]
+            #print(delta_w[n])
+            avg_b.add_(torch.mean(torch.sum(torch.sum(-1*torch.log(delta_w[n])/torch.cuda.FloatTensor([3.3219]),1),1),0))
+            delta_min[n]=torch.min(torch.min(delta_w[n],2)[0],1)[0]
             #delta_min.append(torch.min(torch.min(delta_w[n],1)[0],1)[0])
-
+        #print(avg_b)
+        total_b.add_(avg_b)
         d_min = (torch.min(delta_min,0)[0]).unsqueeze(1).unsqueeze(1)*K
+        #print(d_min)
         #print(d_min.size())
         #d_min.transpose_(0,1)
         #for n in range(N_layer):
 
 
 
-        insignificant=[]
+        insignificant = []
         weights = torch.cuda.FloatTensor(N_layer,BATCH_SIZE)
         for n in range(N_layer):
             insignificant.append(torch.lt(delta_w[n], d_min).type(torch.cuda.FloatTensor))
@@ -562,12 +623,15 @@ for epoch in range(EPOCH):
         weights = []
         bias = []
 
+        #print(lamb*scale*rdw_updates[N_layer-1-0])
         for i in range(N_layer):
             #print(rdw_updates[N_layer-1-i].size())
             #print(insignificant[i].size())
             param_list[2 * i].add_(-1*lamb*scale*rdw_updates[N_layer-1-i])
+
             #print(param_list[2*i].size())
             #param_list[2*i].add_(rdw)
+
 
 
         #print(loss)
@@ -597,6 +661,7 @@ for epoch in range(EPOCH):
             apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
 
         if step % 20 == 0:
+            print('Avg_b in a mini_batch: %.4f'% avg_b[0])
             print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0][0])
 
         avg_loss = np.append(avg_loss, loss.data[0][0])
@@ -611,9 +676,8 @@ for epoch in range(EPOCH):
             #plt.show(block=False)
             i = i + 1
 
-        train_loss_x = train_loss_x.astype(int)120
-   4
-        7fgv'''
+        train_loss_x = train_loss_x.astype(int)
+        '''
 
         '''
         if step % 50 == 0:
@@ -622,7 +686,9 @@ for epoch in range(EPOCH):
             accuracy = sum(pred_y == test_y)/float(test_y.size(0))
             print('Epoch: ',epoch,'| train loss : %.4f' %loss.data[0], '| test accuracy: %.2f' % accuracy)
         '''
-
+    torch.save(mlp, 'mlp_mnist_fms2.pkl')
+    print('Saving model......')
+    print(total_b)
     # per epoch updating......
     if en_plot:
         train_loss_y = np.append(train_loss_y, np.mean(avg_loss))
@@ -643,7 +709,7 @@ if save_model:
 
 if load_model:
     print('Loading model......')
-    mlp = torch.load('mlp_mnist_10epoch.pkl')
+    mlp = torch.load('fms_backup.pkl')
 
 # >>>>>>>>>>>>>>>>>>>>>>>>Inference
 linear = list(mlp.hidden1.parameters())
@@ -652,20 +718,21 @@ out = list(mlp.out.parameters())
 
 # >>>>>>>>Regulate trained neural network weight into fixed point counterpart, then do inference
 if nonideal_inference:
+
     apply_format_inplace('FXP', linear[0].data, IL, FL)  # weight regulation
     apply_format_inplace('FXP', linear[1].data, IL, FL)  # bias regulation
     apply_format_inplace('FXP', linear2[0].data, IL, FL)  # weight regulation
     apply_format_inplace('FXP', linear2[1].data, IL, FL)  # bias regulation
     apply_format_inplace('FXP', out[0].data, IL, FL)  # weight regulation
     apply_format_inplace('FXP', out[1].data, IL, FL)  # bias regulation
-    apply_format_inplace('FXP', test_x.data, IL, FL)  # input regulation
+    #apply_format_inplace('FXP', test_x.data, IL, FL)  # input regulation
     # apply_bitflip(linear[0].data,0.5,3,10,13)
 
 if en_ntv_inference:
     print("injecting bit flip fault model...")
-    apply_bitflip(linear[0].data, p_flip, IL, FL, flip_len)
-    apply_bitflip(linear2[0].data, p_flip, IL, FL, flip_len)
-    apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
+    linear[0].data=(apply_bitflip(linear[0].data.cpu(), p_flip, IL, FL, flip_len)).cuda()
+    linear2[0].data=apply_bitflip(linear2[0].data.cpu(), p_flip, IL, FL, flip_len).cuda()
+    out[0].data=apply_bitflip(out[0].data.cpu(), p_flip, IL, FL, flip_len).cuda()
     # apply_bitflip(x,p,IL,FL,flip_length):
 
 # print(type(test_x)) #<class 'torch.autograd.variable.Variable'>
@@ -682,9 +749,20 @@ if nonideal_inference and (not nonideal_train):
     mlp.out.register_forward_hook(fixed_point_hook)
 
 # >>>>>>>> Testing!!!
-test_output = mlp(test_x)
-pred_y = torch.max(test_output, 1)[1].data.squeeze()
-accuracy = sum(pred_y == test_y) / float(test_y.size(0))
+test_loss = 0
+correct = 0
+for data, target in test_loader:
 
-print(accuracy, 'prediction accuracy!')
+    data, target = data.cuda(), target.cuda()
+    if nonideal_inference:
+        apply_format_inplace('FXP', data, IL, FL)  # input regulation
+    data, target = Variable(data, volatile=True), Variable(target)
+    output = mlp(data)
+    #test_loss += F.nll_loss(output, target, size_average=False).data[0] # sum up batch loss
+    pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
+    correct += pred.eq(target.data.view_as(pred)).cpu().sum()
+
+#test_loss /= len(test_loader.dataset)
+print('\nTest set: Accuracy: (%.4f)\n', 100. * correct / len(test_loader.dataset))
+
 print('End of testing!')

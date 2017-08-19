@@ -1,5 +1,6 @@
 import torch
 import torchvision
+from torchvision import datasets, transforms
 import torch.nn as nn
 import torch.nn.init as init
 from torch.autograd import Variable
@@ -11,44 +12,62 @@ from utils import *
 import numpy as np
 
 
-torch.manual_seed(2)
+torch.manual_seed(4)
 
 
-EPOCH = 20
+EPOCH = 0
 BATCH_SIZE = 128
-LR = 0.01
+LR = 0.1
 DOWNLOAD_MNIST = True
 save_model = 0
-load_model = 0
+load_model = 1
 en_plot = 0
 
 SI = 1 # reminder for sign bit
-IL = 5  # IL = torch.IntTensor([4])   Not including the signed bit
-FL = 14 # FL = torch.IntTensor([12])
-nonideal_train = 1 #fixed point train
-nonideal_inference = 0 #fixed point inference
+IL = 3  # IL = torch.IntTensor([4])   Not including the signed bit
+FL = 3 # FL = torch.IntTensor([12])
+nonideal_train = 0 #fixed point train
+nonideal_inference = 1 #fixed point inference
 
 #enabling ntv which increases bit flip probability
 en_ntv_inference = 0
 en_ntv_train = 0
-p_flip = 0.0001
-flip_len = IL + FL + SI # flip all bits
+p_flip = 0.001
+flip_len = IL + FL - 1#IL + FL + SI # flip all bits IL + FL + SI
 
 grads = [] #gradients are inside
+
+#train_data = torchvision.datasets.MNIST(
+#    root = './mnist/',
+#    train=True,
+#    transform=torchvision.transforms.ToTensor(),
+#    download=DOWNLOAD_MNIST,
+#)
 
 train_data = torchvision.datasets.MNIST(
     root = './mnist/',
     train=True,
-    transform=torchvision.transforms.ToTensor(),
+    transform=transforms.Compose([ transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]),
     download=DOWNLOAD_MNIST,
 )
 
-test_data = torchvision.datasets.MNIST(root='./mnist/', train=False)
+
+test_data = torchvision.datasets.MNIST(root='./mnist/', train=False,transform=transforms.Compose([ transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]))
 
 train_loader = Data.DataLoader(dataset=train_data, batch_size=BATCH_SIZE, shuffle=True)
 
-test_x = Variable(torch.unsqueeze(test_data.test_data, dim=1),volatile=True).type(torch.FloatTensor)[:2000]/255.
-test_y = test_data.test_labels[:2000]
+
+test_x = Variable(torch.unsqueeze(test_data.test_data, dim=1),volatile=True).type(torch.FloatTensor)
+test_y = test_data.test_labels
+
+
+test_loader = torch.utils.data.DataLoader(
+    datasets.MNIST('./mnist/', train=False, transform=transforms.Compose([
+                       transforms.ToTensor(),
+                       transforms.Normalize((0.1307,), (0.3081,))
+                   ])),
+    batch_size=BATCH_SIZE, shuffle=False)
+
 
 
 # defining hooks
@@ -196,7 +215,7 @@ for epoch in range(EPOCH):
             apply_bitflip(out[0].data, p_flip, IL, FL, flip_len)
 
         if step % 50 == 0:
-            print('Epoch: ', epoch, '| train loss : %.4f' % loss.data[0][0])
+            print('Epoch: ', epoch, '| train loss : %.8f' % loss.data[0][0])
 
         avg_loss = np.append(avg_loss, loss.data[0][0])
 
@@ -238,12 +257,12 @@ plt.show()
 
 if save_model:
     print('Saving model......')
-    torch.save(mlp, 'mlp_mnist_10epoch.pkl')
+    torch.save(mlp, 'mlp_backup2.pkl')
     #>>>>>>>>Test neural network performance
 
 if load_model:
     print('Loading model......')
-    mlp = torch.load('mlp_mnist_10epoch.pkl')
+    mlp = torch.load('mlp_backup2.pkl')
 
 #>>>>>>>>>>>>>>>>>>>>>>>>Inference
 linear = list(mlp.hidden1.parameters())
@@ -286,9 +305,24 @@ if nonideal_inference and (not nonideal_train ):
     mlp.out.register_forward_hook(fixed_point_hook)
 
 #>>>>>>>> Testing!!!
-test_output = mlp(test_x)
-pred_y = torch.max(test_output, 1)[1].data.squeeze()
-accuracy = sum(pred_y == test_y)/float(test_y.size(0))
+#test_output = mlp(test_x)
+#pred_y = torch.max(test_output, 1)[1].data.squeeze()
+#accuracy = sum(pred_y == test_y)/float(test_y.size(0))
+#print(accuracy, 'prediction accuracy!')
 
-print(accuracy, 'prediction accuracy!')
+
+test_loss = 0
+correct = 0
+for data, target in test_loader:
+
+    #data, target = data.cuda(), target.cuda()
+    data, target = Variable(data, volatile=True), Variable(target)
+    output = mlp(data)
+    #test_loss += F.nll_loss(output, target, size_average=False).data[0] # sum up batch loss
+    pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
+    correct += pred.eq(target.data.view_as(pred)).cpu().sum()
+
+#test_loss /= len(test_loader.dataset)
+print('\nTest set: Accuracy: (%.4f)\n', 100. * correct / len(test_loader.dataset))
+
 print('End of testing!')
